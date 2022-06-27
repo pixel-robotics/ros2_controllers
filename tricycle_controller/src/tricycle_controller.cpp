@@ -156,14 +156,14 @@ controller_interface::return_type TricycleController::update(
   }
   else
   {
-    const double Ws = traction_joint_[0].velocity_state.get().get_value();  // in radians/s
-    double alpha = steering_joint_[0].position_state.get().get_value();     // in radians
-    if (std::isnan(Ws) || std::isnan(alpha))
+    double Ws_read = traction_joint_[0].velocity_state.get().get_value();  // in radians/s
+    double alpha_read = steering_joint_[0].position_state.get().get_value();     // in radians
+    if (std::isnan(Ws_read) || std::isnan(alpha_read))
     {
       RCLCPP_ERROR(get_node()->get_logger(), "Could not read feeback value");
       return controller_interface::return_type::ERROR;
     }
-    odometry_.updateFromVelocity(Ws, alpha, current_time);
+    odometry_.updateFromVelocity(Ws_read, alpha_read, current_time);
   }
 
   tf2::Quaternion orientation;
@@ -219,20 +219,27 @@ controller_interface::return_type TricycleController::update(
   previous_commands_.emplace(command);
 
   // Compute wheel velocity and angle
-  auto [alpha, Ws] = process_twist_command(linear_command, angular_command);
+  auto [alpha_write, Ws_write] = process_twist_command(linear_command, angular_command);
+
+  // Accelerate gradually until when steering motor has reached target angle
+  // Increase power to make it more strict (i.e to make it slower when angle difference is big)
+  // TODO: find the best function profile, e.g convex power functions
+  // TODO: Is there a better/more generic way to take into consideration motor velocity/acceleration limitations?
+  double alpha_delta = abs(alpha_write - steering_joint_[0].position_state.get().get_value());
+  Ws_write *= cos(alpha_delta/2);
 
   //  Publish ackermann command
   if (publish_ackermann_command_ && realtime_ackermann_command_publisher_->trylock())
   {
     auto & realtime_ackermann_command = realtime_ackermann_command_publisher_->msg_;
     realtime_ackermann_command.speed =
-      Ws;  // speed in AckermannDrive is defined desired forward speed (m/s) but we use it here as wheel speed (rad/s)
-    realtime_ackermann_command.steering_angle = alpha;
+      Ws_write;  // speed in AckermannDrive is defined desired forward speed (m/s) but we use it here as wheel speed (rad/s)
+    realtime_ackermann_command.steering_angle = alpha_write;
     realtime_ackermann_command_publisher_->unlockAndPublish();
   }
 
-  traction_joint_[0].velocity_command.get().set_value(Ws);
-  steering_joint_[0].position_command.get().set_value(alpha);
+  traction_joint_[0].velocity_command.get().set_value(Ws_write);
+  steering_joint_[0].position_command.get().set_value(alpha_write);
   return controller_interface::return_type::OK;
 }
 
@@ -600,11 +607,11 @@ CallbackReturn TricycleController::get_steering(
 double TricycleController::convert_trans_rot_vel_to_steering_angle(
   double Vx, double theta_dot, double wheelbase)
 {
-  if (theta_dot == 0 || Vx == 0)
+    if (theta_dot == 0 || Vx == 0)
   {
     return 0;
   }
-  return std::atan(theta_dot / (Vx * wheelbase));
+  return std::atan(theta_dot * wheelbase / Vx);
 }
 
 std::tuple<double, double> TricycleController::process_twist_command(double Vx, double theta_dot)
@@ -612,9 +619,11 @@ std::tuple<double, double> TricycleController::process_twist_command(double Vx, 
   // using naming convention in http://users.isr.ist.utl.pt/~mir/cadeiras/robmovel/Kinematics.pdf
   double alpha, Ws;
 
-  if (Vx == 0 && abs(theta_dot) > 0.1)
+  if (Vx == 0 && theta_dot != 0)
   {  // is spin action
-    Vx = 0.1;
+    alpha = theta_dot > 0 ? M_PI_2 : -M_PI_2;
+    Ws = abs(theta_dot) * wheel_params_.wheelbase/wheel_params_.radius;
+    return std::make_tuple(alpha, Ws);
   }
 
   alpha = convert_trans_rot_vel_to_steering_angle(Vx, theta_dot, wheel_params_.wheelbase);
@@ -627,3 +636,4 @@ std::tuple<double, double> TricycleController::process_twist_command(double Vx, 
 #include <pluginlib/class_list_macros.hpp>
 PLUGINLIB_EXPORT_CLASS(
   tricycle_controller::TricycleController, controller_interface::ControllerInterface)
+
