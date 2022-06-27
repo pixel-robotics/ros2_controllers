@@ -214,7 +214,15 @@ controller_interface::return_type TricycleController::update(
   // TODO: find the best function profile, e.g convex power functions
   // TODO: Is there a better/more generic way to take into consideration motor velocity/acceleration limitations?
   double alpha_delta = abs(alpha_write - steering_joint_[0].position_state.get().get_value());
-  Ws_write *= std::max(0.01, cos(alpha_delta));
+  double scale;
+  if (alpha_delta < M_PI_2 / 3) {
+    scale = 1;
+  } else if (alpha_delta > M_PI_2) {
+    scale = 0.01;
+  } else {
+    scale = cos(alpha_delta);
+  }
+  Ws_write *= scale;
 
   //  Publish ackermann command
   if (publish_ackermann_command_ && realtime_ackermann_command_publisher_->trylock()) {
