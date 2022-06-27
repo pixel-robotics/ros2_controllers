@@ -215,7 +215,7 @@ controller_interface::return_type TricycleController::update(
   // TODO: Is there a better/more generic way to take into consideration motor velocity/acceleration limitations?
   double alpha_delta = abs(alpha_write - steering_joint_[0].position_state.get().get_value());
   double scale;
-  if (alpha_delta < M_PI_2 / 3) {
+  if (alpha_delta < M_PI / 6) {
     scale = 1;
   } else if (alpha_delta > M_PI_2) {
     scale = 0.01;
