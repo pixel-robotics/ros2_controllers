@@ -222,7 +222,7 @@ controller_interface::return_type TricycleController::update(
   } else {
     scale = cos(alpha_delta);
   }
-  Ws_write *= scale;
+  Ws_write *= scale;;
 
   //  Publish ackermann command
   if (publish_ackermann_command_ && realtime_ackermann_command_publisher_->trylock()) {
