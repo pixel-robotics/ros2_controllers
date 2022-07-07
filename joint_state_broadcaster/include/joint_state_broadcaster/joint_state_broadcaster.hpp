@@ -27,6 +27,7 @@
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "realtime_tools/realtime_publisher.h"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "rclcpp/clock.hpp"
 
 namespace joint_state_broadcaster
 {
@@ -111,6 +112,7 @@ protected:
     dynamic_joint_state_publisher_;
   std::shared_ptr<realtime_tools::RealtimePublisher<control_msgs::msg::DynamicJointState>>
     realtime_dynamic_joint_state_publisher_;
+  rclcpp::Clock clock_ = rclcpp::Clock();
 };
 
 }  // namespace joint_state_broadcaster
