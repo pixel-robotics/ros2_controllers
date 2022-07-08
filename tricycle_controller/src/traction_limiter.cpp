@@ -19,12 +19,12 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "tricycle_controller/speed_limiter.hpp"
+#include "tricycle_controller/traction_limiter.hpp"
 #include "rcppmath/clamp.hpp"
 
 namespace tricycle_controller
 {
-SpeedLimiter::SpeedLimiter(
+TractionLimiter::TractionLimiter(
   bool has_velocity_limits, bool has_acceleration_limits, bool has_jerk_limits, double min_velocity,
   double max_velocity, double min_acceleration, double max_acceleration, double min_jerk,
   double max_jerk)
@@ -75,7 +75,7 @@ SpeedLimiter::SpeedLimiter(
   }
 }
 
-double SpeedLimiter::limit(double & v, double v0, double v1, double dt)
+double TractionLimiter::limit(double & v, double v0, double v1, double dt)
 {
   const double tmp = v;
 
@@ -86,7 +86,7 @@ double SpeedLimiter::limit(double & v, double v0, double v1, double dt)
   return tmp != 0.0 ? v / tmp : 1.0;
 }
 
-double SpeedLimiter::limit_velocity(double & v)
+double TractionLimiter::limit_velocity(double & v)
 {
   const double tmp = v;
 
@@ -98,7 +98,7 @@ double SpeedLimiter::limit_velocity(double & v)
   return tmp != 0.0 ? v / tmp : 1.0;
 }
 
-double SpeedLimiter::limit_acceleration(double & v, double v0, double dt)
+double TractionLimiter::limit_acceleration(double & v, double v0, double dt)
 {
   const double tmp = v;
 
@@ -115,7 +115,7 @@ double SpeedLimiter::limit_acceleration(double & v, double v0, double dt)
   return tmp != 0.0 ? v / tmp : 1.0;
 }
 
-double SpeedLimiter::limit_jerk(double & v, double v0, double v1, double dt)
+double TractionLimiter::limit_jerk(double & v, double v0, double v1, double dt)
 {
   const double tmp = v;
 

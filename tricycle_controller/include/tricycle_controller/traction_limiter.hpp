@@ -16,14 +16,15 @@
  * Author: Enrique Fernández
  */
 
-#ifndef TRICYCLE_CONTROLLER__SPEED_LIMITER_HPP_
-#define TRICYCLE_CONTROLLER__SPEED_LIMITER_HPP_
+#ifndef TRICYCLE_CONTROLLER__TRACTION_LIMITER_HPP_
+#define TRICYCLE_CONTROLLER__TRACTION_LIMITER_HPP_
 
 #include <cmath>
 
 namespace tricycle_controller
 {
-class SpeedLimiter
+
+class TractionLimiter
 {
 public:
   /**
@@ -38,7 +39,7 @@ public:
    * \param [in] min_jerk Minimum jerk [m/s^3], usually <= 0
    * \param [in] max_jerk Maximum jerk [m/s^3], usually >= 0
    */
-  SpeedLimiter(
+  TractionLimiter(
     bool has_velocity_limits = false, bool has_acceleration_limits = false,
     bool has_jerk_limits = false, double min_velocity = NAN, double max_velocity = NAN,
     double min_acceleration = NAN, double max_acceleration = NAN, double min_jerk = NAN,
@@ -102,4 +103,4 @@ private:
 
 }  // namespace tricycle_controller
 
-#endif  // TRICYCLE_CONTROLLER__SPEED_LIMITER_HPP_
+#endif  // TRICYCLE_CONTROLLER__TRACTION_LIMITER_HPP_

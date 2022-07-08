@@ -25,7 +25,8 @@ add_library(
   SHARED
   src/tricycle_controller.cpp
   src/odometry.cpp
-  src/speed_limiter.cpp
+  src/traction_limiter.cpp
+  src/steering_limiter.cpp
 )
 target_include_directories(
   ${PROJECT_NAME}

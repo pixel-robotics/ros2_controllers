@@ -40,7 +40,8 @@
 #include "realtime_tools/realtime_publisher.h"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tricycle_controller/odometry.hpp"
-#include "tricycle_controller/speed_limiter.hpp"
+#include "tricycle_controller/traction_limiter.hpp"
+#include "tricycle_controller/steering_limiter.hpp"
 #include "tricycle_controller/visibility_control.h"
 
 namespace tricycle_controller
@@ -160,8 +161,8 @@ protected:
   std::queue<AckermannDrive> previous_commands_;  // last two commands
 
   // speed limiters
-  SpeedLimiter limiter_traction_;
-  SpeedLimiter limiter_steering_;
+  TractionLimiter limiter_traction_;
+  SteeringLimiter limiter_steering_;
 
   rclcpp::Time previous_update_timestamp_{0};
 
