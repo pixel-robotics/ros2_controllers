@@ -157,11 +157,11 @@ protected:
 
   realtime_tools::RealtimeBox<std::shared_ptr<TwistStamped>> received_velocity_msg_ptr_{nullptr};
 
-  std::queue<TwistStamped> previous_commands_;  // last two commands
+  std::queue<AckermannDrive> previous_commands_;  // last two commands
 
   // speed limiters
-  SpeedLimiter limiter_linear_;
-  SpeedLimiter limiter_angular_;
+  SpeedLimiter limiter_traction_;
+  SpeedLimiter limiter_steering_;
 
   rclcpp::Time previous_update_timestamp_{0};
 
