@@ -480,9 +480,8 @@ bool TricycleController::reset()
   std::queue<AckermannDrive> empty_ackermann_drive;
   std::swap(previous_commands_, empty_ackermann_drive);
 
-  // TODO: clear handles
-  // traction_joint_.clear();
-  // steering_joint_.clear();
+  traction_joint_.clear();
+  steering_joint_.clear();
 
   subscriber_is_active_ = false;
   velocity_command_subscriber_.reset();
