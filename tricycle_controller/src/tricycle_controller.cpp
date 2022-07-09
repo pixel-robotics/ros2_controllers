@@ -35,6 +35,7 @@ constexpr auto DEFAULT_COMMAND_TOPIC = "~/cmd_vel";
 constexpr auto DEFAULT_ACKERMANN_OUT_TOPIC = "~/cmd_ackermann";
 constexpr auto DEFAULT_ODOMETRY_TOPIC = "~/odom";
 constexpr auto DEFAULT_TRANSFORM_TOPIC = "/tf";
+constexpr auto DEFAULT_RESET_ODOM_SERVICE = "~/reset_odometry";
 }  // namespace
 
 namespace tricycle_controller
@@ -414,6 +415,13 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
     odometry_transform_message.transforms.front().child_frame_id = odom_params_.base_frame_id;
   }
 
+  // Create odom reset service
+    reset_odom_service_ = get_node()->create_service<std_srvs::srv::Empty>(
+      DEFAULT_RESET_ODOM_SERVICE,
+      std::bind(
+        &TricycleController::reset_odometry, this, std::placeholders::_1, std::placeholders::_2,
+        std::placeholders::_3));
+
   previous_update_timestamp_ = get_node()->get_clock()->now();
   return CallbackReturn::SUCCESS;
 }
@@ -463,6 +471,16 @@ CallbackReturn TricycleController::on_error(const rclcpp_lifecycle::State &)
     return CallbackReturn::ERROR;
   }
   return CallbackReturn::SUCCESS;
+}
+
+void TricycleController::reset_odometry(
+  const std::shared_ptr<rmw_request_id_t>/*request_header*/,
+  const std::shared_ptr<std_srvs::srv::Empty::Request>/*req*/,
+  std::shared_ptr<std_srvs::srv::Empty::Response>/*res*/)
+{
+  odometry_.resetOdometry();
+  RCLCPP_INFO(get_node()->get_logger(), "Odometry successfully reset");
+
 }
 
 bool TricycleController::reset()
