@@ -48,6 +48,7 @@ SteeringLimiter::SteeringLimiter(
   {
     throw std::invalid_argument("Acceleration cannot be negative." + error);
   }
+
 }
 
 double SteeringLimiter::limit(double & p, double p0, double p1, double dt)
