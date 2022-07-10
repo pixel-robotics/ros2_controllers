@@ -1,4 +1,4 @@
-// Copyright 2020 PAL Robotics S.L.
+// Copyright 2022 Pixel Robotics.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /*
- * Author: Enrique Fernández
+ * Author: Tony Najjar
  */
 
 #ifndef TRICYCLE_CONTROLLER__TRACTION_LIMITER_HPP_
@@ -41,8 +41,9 @@ public:
    */
   TractionLimiter(
     bool has_velocity_limits = false, bool has_acceleration_limits = false,
-    bool has_jerk_limits = false, double min_velocity = NAN, double max_velocity = NAN,
-    double min_acceleration = NAN, double max_acceleration = NAN, double min_jerk = NAN,
+    bool has_deceleration_limits = false, bool has_jerk_limits = false, double min_velocity = NAN,
+    double max_velocity = NAN, double min_acceleration = NAN, double max_acceleration = NAN,
+    double min_deceleration = NAN, double max_deceleration = NAN, double min_jerk = NAN,
     double max_jerk = NAN);
 
   /**
@@ -86,6 +87,7 @@ private:
   // Enable/Disable velocity/acceleration/jerk limits:
   bool has_velocity_limits_;
   bool has_acceleration_limits_;
+  bool has_deceleration_limits_;
   bool has_jerk_limits_;
 
   // Velocity limits:
@@ -95,6 +97,10 @@ private:
   // Acceleration limits:
   double min_acceleration_;
   double max_acceleration_;
+
+  // Acceleration limits:
+  double min_deceleration_;
+  double max_deceleration_;
 
   // Jerk limits:
   double min_jerk_;

@@ -1,4 +1,4 @@
-// Copyright 2020 PAL Robotics S.L.
+// Copyright 2022 Pixel Robotics.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,28 +13,33 @@
 // limitations under the License.
 
 /*
- * Author: Enrique Fernández
+ * Author: Tony Najjar
  */
 
 #include <algorithm>
 #include <stdexcept>
 
-#include "tricycle_controller/traction_limiter.hpp"
+#include "rclcpp/rclcpp.hpp"
 #include "rcppmath/clamp.hpp"
+#include "tricycle_controller/traction_limiter.hpp"
 
 namespace tricycle_controller
 {
 TractionLimiter::TractionLimiter(
-  bool has_velocity_limits, bool has_acceleration_limits, bool has_jerk_limits, double min_velocity,
-  double max_velocity, double min_acceleration, double max_acceleration, double min_jerk,
+  bool has_velocity_limits, bool has_acceleration_limits, bool has_deceleration_limits,
+  bool has_jerk_limits, double min_velocity, double max_velocity, double min_acceleration,
+  double max_acceleration, double min_deceleration, double max_deceleration, double min_jerk,
   double max_jerk)
 : has_velocity_limits_(has_velocity_limits),
   has_acceleration_limits_(has_acceleration_limits),
+  has_deceleration_limits_(has_deceleration_limits),
   has_jerk_limits_(has_jerk_limits),
   min_velocity_(min_velocity),
   max_velocity_(max_velocity),
   min_acceleration_(min_acceleration),
   max_acceleration_(max_acceleration),
+  min_deceleration_(min_deceleration),
+  max_deceleration_(max_deceleration),
   min_jerk_(min_jerk),
   max_jerk_(max_jerk)
 {
@@ -59,7 +64,23 @@ TractionLimiter::TractionLimiter(
     }
     if (std::isnan(min_acceleration_))
     {
-      min_acceleration_ = -max_acceleration_;
+      min_acceleration_ = 0;
+    }
+    else if (min_acceleration_ < 0)
+    {
+      throw std::runtime_error("Acceleration cannot be negative");
+    }
+  }
+  if (has_deceleration_limits_)
+  {
+    if (std::isnan(max_deceleration_))
+    {
+      throw std::runtime_error(
+        "Cannot apply acceleration limits if max_acceleration is not specified");
+    }
+    if (std::isnan(min_deceleration_))
+    {
+      min_deceleration_ = 0;
     }
   }
   if (has_jerk_limits_)
@@ -80,6 +101,9 @@ double TractionLimiter::limit(double & v, double v0, double v1, double dt)
   const double tmp = v;
 
   limit_jerk(v, v0, v1, dt);
+  RCLCPP_ERROR(rclcpp::get_logger("test"), "v: %f, v0: %f", v, v0);
+  // if ((v >= 0) != (v0 >= 0))
+  //   v = 0;
   limit_acceleration(v, v0, dt);
   limit_velocity(v);
 
@@ -104,10 +128,23 @@ double TractionLimiter::limit_acceleration(double & v, double v0, double dt)
 
   if (has_acceleration_limits_)
   {
-    const double dv_min = min_acceleration_ * dt;
-    const double dv_max = max_acceleration_ * dt;
+    RCLCPP_ERROR(rclcpp::get_logger("test"), "Limit ACC");
 
-    const double dv = rcppmath::clamp(v - v0, dv_min, dv_max);
+    double dv_min;
+    double dv_max;
+
+    if (abs(v) >= abs(v0))
+    {
+      dv_min = min_acceleration_ * dt;
+      dv_max = max_acceleration_ * dt;
+    }
+    else
+    {
+      dv_min = min_deceleration_ * dt;
+      dv_max = max_deceleration_ * dt;
+    }
+
+    const double dv = rcppmath::clamp(abs(v - v0), dv_min, dv_max) * (v - v0 > 0 ? 1 : -1);
 
     v = v0 + dv;
   }

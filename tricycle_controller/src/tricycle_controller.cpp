@@ -74,11 +74,14 @@ CallbackReturn TricycleController::on_init()
 
     auto_declare<bool>("traction.has_velocity_limits", false);
     auto_declare<bool>("traction.has_acceleration_limits", false);
+    auto_declare<bool>("traction.has_deceleration_limits", false);
     auto_declare<bool>("traction.has_jerk_limits", false);
     auto_declare<double>("traction.max_velocity", NAN);
     auto_declare<double>("traction.min_velocity", NAN);
     auto_declare<double>("traction.max_acceleration", NAN);
     auto_declare<double>("traction.min_acceleration", NAN);
+    auto_declare<double>("traction.max_deceleration", NAN);
+    auto_declare<double>("traction.min_deceleration", NAN);
     auto_declare<double>("traction.max_jerk", NAN);
     auto_declare<double>("traction.min_jerk", NAN);
 
@@ -216,8 +219,13 @@ controller_interface::return_type TricycleController::update(
 
   auto & last_command = previous_commands_.back();
   auto & second_to_last_command = previous_commands_.front();
+
+    RCLCPP_ERROR(get_node()->get_logger(), "Before filter: %f", Ws_write);
+
   limiter_traction_.limit(
     Ws_write, last_command.speed, second_to_last_command.speed, update_dt.seconds());
+
+    RCLCPP_ERROR(get_node()->get_logger(), "After filter: %f \n", Ws_write);
 
   limiter_steering_.limit(
     alpha_write, last_command.steering_angle, second_to_last_command.steering_angle, update_dt.seconds());
@@ -290,11 +298,14 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
     limiter_traction_ = TractionLimiter(
       get_node()->get_parameter("traction.has_velocity_limits").as_bool(),
       get_node()->get_parameter("traction.has_acceleration_limits").as_bool(),
+      get_node()->get_parameter("traction.has_deceleration_limits").as_bool(),
       get_node()->get_parameter("traction.has_jerk_limits").as_bool(),
       get_node()->get_parameter("traction.min_velocity").as_double(),
       get_node()->get_parameter("traction.max_velocity").as_double(),
       get_node()->get_parameter("traction.min_acceleration").as_double(),
       get_node()->get_parameter("traction.max_acceleration").as_double(),
+      get_node()->get_parameter("traction.min_deceleration").as_double(),
+      get_node()->get_parameter("traction.max_deceleration").as_double(),
       get_node()->get_parameter("traction.min_jerk").as_double(),
       get_node()->get_parameter("traction.max_jerk").as_double());
 

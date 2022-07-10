@@ -1,4 +1,4 @@
-// Copyright 2020 PAL Robotics S.L.
+// Copyright 2022 Pixel Robotics.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /*
- * Author: Enrique Fernández
+ * Author: Tony Najjar
  */
 
 #ifndef TRICYCLE_CONTROLLER__STEERING_LIMITER_HPP_
