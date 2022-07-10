@@ -29,9 +29,6 @@ class TractionLimiter
 public:
   /**
    * \brief Constructor
-   * \param [in] has_velocity_limits     if true, applies velocity limits
-   * \param [in] has_acceleration_limits if true, applies acceleration limits
-   * \param [in] has_jerk_limits         if true, applies jerk limits
    * \param [in] min_velocity Minimum velocity [m/s], usually <= 0
    * \param [in] max_velocity Maximum velocity [m/s], usually >= 0
    * \param [in] min_acceleration Minimum acceleration [m/s^2], usually <= 0
@@ -40,11 +37,10 @@ public:
    * \param [in] max_jerk Maximum jerk [m/s^3], usually >= 0
    */
   TractionLimiter(
-    bool has_velocity_limits = false, bool has_acceleration_limits = false,
-    bool has_deceleration_limits = false, bool has_jerk_limits = false, double min_velocity = NAN,
-    double max_velocity = NAN, double min_acceleration = NAN, double max_acceleration = NAN,
-    double min_deceleration = NAN, double max_deceleration = NAN, double min_jerk = NAN,
-    double max_jerk = NAN);
+    double min_velocity = 0.0, double max_velocity = std::numeric_limits<double>::max(),
+    double min_acceleration = 0.0, double max_acceleration = std::numeric_limits<double>::max(),
+    double min_deceleration = 0.0, double max_deceleration = std::numeric_limits<double>::max(),
+    double min_jerk = 0.0, double max_jerk = std::numeric_limits<double>::max());
 
   /**
    * \brief Limit the velocity and acceleration
@@ -84,12 +80,6 @@ public:
   double limit_jerk(double & v, double v0, double v1, double dt);
 
 private:
-  // Enable/Disable velocity/acceleration/jerk limits:
-  bool has_velocity_limits_;
-  bool has_acceleration_limits_;
-  bool has_deceleration_limits_;
-  bool has_jerk_limits_;
-
   // Velocity limits:
   double min_velocity_;
   double max_velocity_;
@@ -98,7 +88,7 @@ private:
   double min_acceleration_;
   double max_acceleration_;
 
-  // Acceleration limits:
+  // Deceleration limits:
   double min_deceleration_;
   double max_deceleration_;
 

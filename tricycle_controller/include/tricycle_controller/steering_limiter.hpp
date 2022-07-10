@@ -29,9 +29,6 @@ class SteeringLimiter
 public:
   /**
    * \brief Constructor
-   * \param [in] has_position_limits     if true, applies position limits
-   * \param [in] has_velocity_limits     if true, applies velocity limits
-   * \param [in] has_acceleration_limits if true, applies acceleration limits
    * \param [in] min_position Minimum position [m] or [rad], usually <= 0
    * \param [in] max_position Maximum position [m] or [rad], usually >= 0
    * \param [in] min_velocity Minimum velocity [m/s] or [rad/s], usually <= 0
@@ -40,10 +37,9 @@ public:
    * \param [in] max_acceleration Maximum acceleration [m/s^2] or [rad/s^2], usually >= 0
    */
   SteeringLimiter(
-    bool has_position_limits = false, bool has_velocity_limits = false,
-    bool has_acceleration_limits = false, double min_position = NAN, double max_position = NAN,
-    double min_velocity = NAN, double max_velocity = NAN, double min_acceleration = NAN,
-    double max_acceleration = NAN);
+    double min_position = -M_PI_2, double max_position = M_PI_2,
+    double min_velocity = 0.0, double max_velocity = std::numeric_limits<double>::max(),
+    double min_acceleration = 0.0, double max_acceleration = std::numeric_limits<double>::max());
 
   /**
    * \brief Limit the position, velocity and acceleration
@@ -82,10 +78,6 @@ public:
   double limit_acceleration(double & p, double p0, double p1, double dt);
 
 private:
-  // Enable/Disable position/velocity/acceleration limits:
-  bool has_position_limits_;
-  bool has_velocity_limits_;
-  bool has_acceleration_limits_;
 
   // Position limits:
   double min_position_;
@@ -98,6 +90,7 @@ private:
   // Acceleration limits:
   double min_acceleration_;
   double max_acceleration_;
+
 };
 
 }  // namespace tricycle_controller

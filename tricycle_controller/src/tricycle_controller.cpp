@@ -72,10 +72,6 @@ CallbackReturn TricycleController::on_init()
     auto_declare<int>("velocity_rolling_window_size", 10);
     auto_declare<bool>("use_stamped_vel", use_stamped_vel_);
 
-    auto_declare<bool>("traction.has_velocity_limits", false);
-    auto_declare<bool>("traction.has_acceleration_limits", false);
-    auto_declare<bool>("traction.has_deceleration_limits", false);
-    auto_declare<bool>("traction.has_jerk_limits", false);
     auto_declare<double>("traction.max_velocity", NAN);
     auto_declare<double>("traction.min_velocity", NAN);
     auto_declare<double>("traction.max_acceleration", NAN);
@@ -85,9 +81,6 @@ CallbackReturn TricycleController::on_init()
     auto_declare<double>("traction.max_jerk", NAN);
     auto_declare<double>("traction.min_jerk", NAN);
 
-    auto_declare<bool>("steering.has_position_limits", false);
-    auto_declare<bool>("steering.has_velocity_limits", false);
-    auto_declare<bool>("steering.has_acceleration_limits", false);
     auto_declare<double>("steering.max_position", NAN);
     auto_declare<double>("steering.min_position", NAN);
     auto_declare<double>("steering.max_velocity", NAN);
@@ -296,10 +289,6 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
 
   try {
     limiter_traction_ = TractionLimiter(
-      get_node()->get_parameter("traction.has_velocity_limits").as_bool(),
-      get_node()->get_parameter("traction.has_acceleration_limits").as_bool(),
-      get_node()->get_parameter("traction.has_deceleration_limits").as_bool(),
-      get_node()->get_parameter("traction.has_jerk_limits").as_bool(),
       get_node()->get_parameter("traction.min_velocity").as_double(),
       get_node()->get_parameter("traction.max_velocity").as_double(),
       get_node()->get_parameter("traction.min_acceleration").as_double(),
@@ -309,22 +298,19 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
       get_node()->get_parameter("traction.min_jerk").as_double(),
       get_node()->get_parameter("traction.max_jerk").as_double());
 
-  } catch (const std::runtime_error & e) {
+  } catch (const std::invalid_argument & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Error configuring traction limiter: %s", e.what());
   }
 
   try {
     limiter_steering_ = SteeringLimiter(
-      get_node()->get_parameter("steering.has_position_limits").as_bool(),
-      get_node()->get_parameter("steering.has_velocity_limits").as_bool(),
-      get_node()->get_parameter("steering.has_acceleration_limits").as_bool(),
       get_node()->get_parameter("steering.min_position").as_double(),
       get_node()->get_parameter("steering.max_position").as_double(),
       get_node()->get_parameter("steering.min_velocity").as_double(),
       get_node()->get_parameter("steering.max_velocity").as_double(),
       get_node()->get_parameter("steering.min_acceleration").as_double(),
       get_node()->get_parameter("steering.max_acceleration").as_double());
-  } catch (const std::runtime_error & e) {
+  } catch (const std::invalid_argument & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Error configuring steering limiter: %s", e.what());
   }
 
