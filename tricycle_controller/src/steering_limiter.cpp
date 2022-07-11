@@ -34,6 +34,16 @@ SteeringLimiter::SteeringLimiter(
   min_acceleration_(min_acceleration),
   max_acceleration_(max_acceleration)
 {
+  if (!std::isnan(min_position_) && std::isnan(max_position_)) max_position_ = -min_position_;
+  if (!std::isnan(max_position_) && std::isnan(min_position_)) min_position_ = -max_position_;
+
+  if (!std::isnan(min_velocity_) && std::isnan(max_velocity_))
+    max_velocity_ = 1000.0;  // Arbitrarily big number
+  if (!std::isnan(max_velocity_) && std::isnan(min_velocity_)) min_velocity_ = 0.0;
+
+  if (!std::isnan(min_acceleration_) && std::isnan(max_acceleration_)) max_acceleration_ = 1000.0;
+  if (!std::isnan(max_acceleration_) && std::isnan(min_acceleration_)) min_acceleration_ = 0.0;
+
   const std::string error =
     "The positive limit will be applied to both directions. Setting different limits for positive "
     "and negative directions is not supported. Actuators are "
@@ -48,16 +58,16 @@ SteeringLimiter::SteeringLimiter(
   {
     throw std::invalid_argument("Acceleration cannot be negative." + error);
   }
-
 }
 
 double SteeringLimiter::limit(double & p, double p0, double p1, double dt)
 {
   const double tmp = p;
 
-  limit_acceleration(p, p0, p1, dt);
-  limit_velocity(p, p0, dt);
-  limit_position(p);
+  if (!std::isnan(min_acceleration_) && !std::isnan(max_acceleration_))
+    limit_acceleration(p, p0, p1, dt);
+  if (!std::isnan(min_velocity_) && !std::isnan(max_velocity_)) limit_velocity(p, p0, dt);
+  if (!std::isnan(min_position_) && !std::isnan(max_position_)) limit_position(p);
 
   return tmp != 0.0 ? p / tmp : 1.0;
 }
@@ -65,7 +75,6 @@ double SteeringLimiter::limit(double & p, double p0, double p1, double dt)
 double SteeringLimiter::limit_position(double & p)
 {
   const double tmp = p;
-
   p = rcppmath::clamp(p, min_position_, max_position_);
 
   return tmp != 0.0 ? p / tmp : 1.0;
@@ -78,13 +87,12 @@ double SteeringLimiter::limit_velocity(double & p, double p0, double dt)
   const double dv_min = min_velocity_ * dt;
   const double dv_max = max_velocity_ * dt;
 
-  double dv = rcppmath::clamp((double) abs(p - p0), dv_min, dv_max);
+  double dv = rcppmath::clamp((double)std::abs(p - p0), dv_min, dv_max);
   dv *= (p - p0 >= 0 ? 1 : -1);
   p = p0 + dv;
 
   return tmp != 0.0 ? p / tmp : 1.0;
 }
-
 
 double SteeringLimiter::limit_acceleration(double & p, double p0, double p1, double dt)
 {
@@ -98,7 +106,7 @@ double SteeringLimiter::limit_acceleration(double & p, double p0, double p1, dou
   const double da_min = min_acceleration_ * dt2;
   const double da_max = max_acceleration_ * dt2;
 
-  double da = rcppmath::clamp((double) abs(dv - dp0), da_min, da_max);
+  double da = rcppmath::clamp((double)std::abs(dv - dp0), da_min, da_max);
   da *= (dv - dp0 >= 0 ? 1 : -1);
   p = p0 + dp0 + da;
 

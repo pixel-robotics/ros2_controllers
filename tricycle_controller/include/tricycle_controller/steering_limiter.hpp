@@ -37,9 +37,9 @@ public:
    * \param [in] max_acceleration Maximum acceleration [m/s^2] or [rad/s^2]
    */
   SteeringLimiter(
-    double min_position = -M_PI_2, double max_position = M_PI_2,
-    double min_velocity = 0.0, double max_velocity = std::numeric_limits<double>::max(),
-    double min_acceleration = 0.0, double max_acceleration = std::numeric_limits<double>::max());
+    double min_position = NAN, double max_position = NAN,
+    double min_velocity = NAN, double max_velocity = NAN,
+    double min_acceleration = NAN, double max_acceleration = NAN);
 
   /**
    * \brief Limit the position, velocity and acceleration

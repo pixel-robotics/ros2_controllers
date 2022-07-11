@@ -37,8 +37,22 @@ TractionLimiter::TractionLimiter(
   min_jerk_(min_jerk),
   max_jerk_(max_jerk)
 {
+  if (!std::isnan(min_velocity_) && std::isnan(max_velocity_))
+    max_velocity_ = 1000.0;  // Arbitrarily big number
+  if (!std::isnan(max_velocity_) && std::isnan(min_velocity_)) min_velocity_ = 0.0;
+
+  if (!std::isnan(min_acceleration_) && std::isnan(max_acceleration_)) max_acceleration_ = 1000.0;
+  if (!std::isnan(max_acceleration_) && std::isnan(min_acceleration_)) min_acceleration_ = 0.0;
+
+  if (!std::isnan(min_deceleration_) && std::isnan(max_deceleration_)) max_deceleration_ = 1000.0;
+  if (!std::isnan(max_deceleration_) && std::isnan(min_acceleration_)) min_deceleration_ = 0.0;
+
+  if (!std::isnan(min_jerk_) && std::isnan(max_jerk_)) max_jerk_ = 1000.0;
+  if (!std::isnan(max_jerk_) && std::isnan(min_jerk_)) min_jerk_ = 0.0;
+
   const std::string error =
-    "The positive limit will be applied to both directions. Setting different limits for positive and negative directions is not supported. Actuators are "
+    "The positive limit will be applied to both directions. Setting different limits for positive "
+    "and negative directions is not supported. Actuators are "
     "assumed to have the same constraints in both directions";
   if (min_velocity_ < 0 || max_velocity_ < 0)
   {
@@ -65,9 +79,10 @@ double TractionLimiter::limit(double & v, double v0, double v1, double dt)
 {
   const double tmp = v;
 
-  limit_jerk(v, v0, v1, dt);
-  limit_acceleration(v, v0, dt);
-  limit_velocity(v);
+  if (!std::isnan(min_jerk_) && !std::isnan(max_jerk_)) limit_jerk(v, v0, v1, dt);
+  if (!std::isnan(min_acceleration_) && !std::isnan(max_acceleration_))
+    limit_acceleration(v, v0, dt);
+  if (!std::isnan(min_velocity_) && !std::isnan(max_velocity_)) limit_velocity(v);
 
   return tmp != 0.0 ? v / tmp : 1.0;
 }
@@ -76,7 +91,8 @@ double TractionLimiter::limit_velocity(double & v)
 {
   const double tmp = v;
 
-  v = rcppmath::clamp((double) abs(v), min_velocity_, max_velocity_);
+  v = rcppmath::clamp((double)std::abs(v), min_velocity_, max_velocity_);
+
   v *= tmp >= 0 ? 1 : -1;
   return tmp != 0.0 ? v / tmp : 1.0;
 }
@@ -97,7 +113,7 @@ double TractionLimiter::limit_acceleration(double & v, double v0, double dt)
     dv_min = min_deceleration_ * dt;
     dv_max = max_deceleration_ * dt;
   }
-  double dv = rcppmath::clamp((double) abs(v - v0), dv_min, dv_max);
+  double dv = rcppmath::clamp((double)std::abs(v - v0), dv_min, dv_max);
   dv *= (v - v0 >= 0 ? 1 : -1);
   v = v0 + dv;
 
@@ -116,7 +132,7 @@ double TractionLimiter::limit_jerk(double & v, double v0, double v1, double dt)
   const double da_min = min_jerk_ * dt2;
   const double da_max = max_jerk_ * dt2;
 
-  double da = rcppmath::clamp((double) abs(dv - dv0), da_min, da_max);
+  double da = rcppmath::clamp((double)std::abs(dv - dv0), da_min, da_max);
   da *= (dv - dv0 >= 0 ? 1 : -1);
   v = v0 + dv0 + da;
 

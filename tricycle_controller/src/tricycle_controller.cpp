@@ -320,6 +320,7 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
   catch (const std::invalid_argument & e)
   {
     RCLCPP_ERROR(get_node()->get_logger(), "Error configuring traction limiter: %s", e.what());
+    return CallbackReturn::ERROR;
   }
 
   try
@@ -335,6 +336,7 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
   catch (const std::invalid_argument & e)
   {
     RCLCPP_ERROR(get_node()->get_logger(), "Error configuring steering limiter: %s", e.what());
+    return CallbackReturn::ERROR;
   }
 
   if (!reset())
