@@ -29,12 +29,12 @@ class SteeringLimiter
 public:
   /**
    * \brief Constructor
-   * \param [in] min_position Minimum position [m] or [rad], usually <= 0
-   * \param [in] max_position Maximum position [m] or [rad], usually >= 0
-   * \param [in] min_velocity Minimum velocity [m/s] or [rad/s], usually <= 0
-   * \param [in] max_velocity Maximum velocity [m/s] or [rad/s], usually >= 0
-   * \param [in] min_acceleration Minimum acceleration [m/s^2] or [rad/s^2], usually <= 0
-   * \param [in] max_acceleration Maximum acceleration [m/s^2] or [rad/s^2], usually >= 0
+   * \param [in] min_position Minimum position [m] or [rad]
+   * \param [in] max_position Maximum position [m] or [rad]
+   * \param [in] min_velocity Minimum velocity [m/s] or [rad/s]
+   * \param [in] max_velocity Maximum velocity [m/s] or [rad/s]
+   * \param [in] min_acceleration Minimum acceleration [m/s^2] or [rad/s^2]
+   * \param [in] max_acceleration Maximum acceleration [m/s^2] or [rad/s^2]
    */
   SteeringLimiter(
     double min_position = -M_PI_2, double max_position = M_PI_2,

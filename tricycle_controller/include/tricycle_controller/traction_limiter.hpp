@@ -29,10 +29,12 @@ class TractionLimiter
 public:
   /**
    * \brief Constructor
-   * \param [in] min_velocity Minimum velocity [m/s], usually <= 0
-   * \param [in] max_velocity Maximum velocity [m/s], usually >= 0
-   * \param [in] min_acceleration Minimum acceleration [m/s^2], usually <= 0
-   * \param [in] max_acceleration Maximum acceleration [m/s^2], usually >= 0
+   * \param [in] min_velocity Minimum velocity [m/s] or [rad/s]
+   * \param [in] max_velocity Maximum velocity [m/s] or [rad/s]
+   * \param [in] min_acceleration Minimum acceleration [m/s^2] or [rad/s^2]
+   * \param [in] max_acceleration Maximum acceleration [m/s^2] or [rad/s^2]
+   * \param [in] min_deceleration Minimum deceleration [m/s^2] or [rad/s^2]
+   * \param [in] max_deceleration Maximum deceleration [m/s^2] or [rad/s^2]
    * \param [in] min_jerk Minimum jerk [m/s^3], usually <= 0
    * \param [in] max_jerk Maximum jerk [m/s^3], usually >= 0
    */
@@ -44,9 +46,9 @@ public:
 
   /**
    * \brief Limit the velocity and acceleration
-   * \param [in, out] v  Velocity [m/s]
-   * \param [in]      v0 Previous velocity to v  [m/s]
-   * \param [in]      v1 Previous velocity to v0 [m/s]
+   * \param [in, out] v  Velocity [m/s] or [rad/s]
+   * \param [in]      v0 Previous velocity to v  [m/s] or [rad/s]
+   * \param [in]      v1 Previous velocity to v0 [m/s] or [rad/s]
    * \param [in]      dt Time step [s]
    * \return Limiting factor (1.0 if none)
    */
@@ -54,15 +56,15 @@ public:
 
   /**
    * \brief Limit the velocity
-   * \param [in, out] v Velocity [m/s]
+   * \param [in, out] v Velocity [m/s] or [rad/s]
    * \return Limiting factor (1.0 if none)
    */
   double limit_velocity(double & v);
 
   /**
    * \brief Limit the acceleration
-   * \param [in, out] v  Velocity [m/s]
-   * \param [in]      v0 Previous velocity [m/s]
+   * \param [in, out] v  Velocity [m/s] or [rad/s]
+   * \param [in]      v0 Previous velocity [m/s] or [rad/s]
    * \param [in]      dt Time step [s]
    * \return Limiting factor (1.0 if none)
    */
@@ -70,9 +72,9 @@ public:
 
   /**
    * \brief Limit the jerk
-   * \param [in, out] v  Velocity [m/s]
-   * \param [in]      v0 Previous velocity to v  [m/s]
-   * \param [in]      v1 Previous velocity to v0 [m/s]
+   * \param [in, out] v  Velocity [m/s] or [rad/s]
+   * \param [in]      v0 Previous velocity to v  [m/s] or [rad/s]
+   * \param [in]      v1 Previous velocity to v0 [m/s] or [rad/s]
    * \param [in]      dt Time step [s]
    * \return Limiting factor (1.0 if none)
    * \see http://en.wikipedia.org/wiki/Jerk_%28physics%29#Motion_control
