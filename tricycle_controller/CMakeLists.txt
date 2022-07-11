@@ -11,7 +11,7 @@ find_package(controller_interface REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcpputils REQUIRED)
@@ -44,7 +44,7 @@ ament_target_dependencies(
   geometry_msgs
   hardware_interface
   nav_msgs
-  std_msgs
+  std_srvs
   pluginlib
   rclcpp
   rclcpp_lifecycle
