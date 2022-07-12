@@ -41,7 +41,8 @@
 #include "realtime_tools/realtime_publisher.h"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tricycle_controller/odometry.hpp"
-#include "tricycle_controller/speed_limiter.hpp"
+#include "tricycle_controller/traction_limiter.hpp"
+#include "tricycle_controller/steering_limiter.hpp"
 #include "tricycle_controller/visibility_control.h"
 
 namespace tricycle_controller
@@ -160,11 +161,11 @@ protected:
 
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_odom_service_;
 
-  std::queue<TwistStamped> previous_commands_;  // last two commands
+  std::queue<AckermannDrive> previous_commands_;  // last two commands
 
   // speed limiters
-  SpeedLimiter limiter_linear_;
-  SpeedLimiter limiter_angular_;
+  TractionLimiter limiter_traction_;
+  SteeringLimiter limiter_steering_;
 
   rclcpp::Time previous_update_timestamp_{0};
 
