@@ -17,6 +17,7 @@
  */
 
 #include <memory>
+#include <optional>
 #include <queue>
 #include <string>
 #include <utility>
@@ -44,6 +45,8 @@ using controller_interface::interface_configuration_type;
 using controller_interface::InterfaceConfiguration;
 using hardware_interface::HW_IF_POSITION;
 using hardware_interface::HW_IF_VELOCITY;
+using hardware_interface::LoanedCommandInterface;
+using hardware_interface::LoanedStateInterface;
 using lifecycle_msgs::msg::State;
 
 TricycleController::TricycleController() : controller_interface::ControllerInterface() {}
@@ -467,9 +470,9 @@ CallbackReturn TricycleController::on_activate(const rclcpp_lifecycle::State &)
   RCLCPP_INFO(get_node()->get_logger(), "On activate: Initialize Joints");
 
   // Initialize the joints
-  const auto wheel_front_result = get_traction(traction_joint_name_, traction_joint_);
-  const auto steering_result = get_steering(steering_joint_name_, steering_joint_);
-  if (wheel_front_result == CallbackReturn::ERROR || steering_result == CallbackReturn::ERROR)
+  if (
+    get_traction(traction_joint_name_, traction_joint_) == CallbackReturn::ERROR ||
+    get_steering(steering_joint_name_, steering_joint_) == CallbackReturn::ERROR)
   {
     return CallbackReturn::ERROR;
   }
@@ -549,46 +552,41 @@ CallbackReturn TricycleController::on_shutdown(const rclcpp_lifecycle::State &)
 
 void TricycleController::halt() { traction_joint_[0].velocity_command.get().set_value(0.0); }
 
+template <typename T>
+std::pair<T, bool> TricycleController::find(
+  std::string joint_name, const char interface_name[], std::vector<T> & interfaces)
+{
+  auto handle = std::find_if(
+    interfaces.begin(), interfaces.end(),
+    [joint_name, interface_name](auto interface) {
+      return interface.get_name() == joint_name && interface.get_interface_name() == interface_name;
+    });
+  if (handle == interfaces.end())
+  {
+    RCLCPP_ERROR(
+      get_node()->get_logger(), "Unable to obtain joint state handle for %s", joint_name.c_str());
+    return std::make_pair(*handle, false);
+  }
+  return std::make_pair(*handle, true);
+}
+
 CallbackReturn TricycleController::get_traction(
   const std::string & traction_joint_name, std::vector<TractionHandle> & joint)
 {
   RCLCPP_INFO(get_node()->get_logger(), "Get Wheel Joint Instance");
-
-  // Lookup the velocity state interface
-  const auto state_handle = std::find_if(
-    state_interfaces_.cbegin(), state_interfaces_.cend(),
-    [&traction_joint_name](const auto & interface)
-    {
-      return interface.get_name() == traction_joint_name &&
-             interface.get_interface_name() == HW_IF_VELOCITY;
-    });
-  if (state_handle == state_interfaces_.cend())
-  {
-    RCLCPP_ERROR(
-      get_node()->get_logger(), "Unable to obtain joint state handle for %s",
-      traction_joint_name.c_str());
-    return CallbackReturn::ERROR;
-  }
-
-  // Lookup the velocity command interface
-  const auto command_handle = std::find_if(
-    command_interfaces_.begin(), command_interfaces_.end(),
-    [&traction_joint_name](const hardware_interface::LoanedCommandInterface & interface)
-    {
-      return interface.get_name() == traction_joint_name &&
-             interface.get_interface_name() == HW_IF_VELOCITY;
-    });
-  if (command_handle == command_interfaces_.end())
-  {
-    RCLCPP_ERROR(
-      get_node()->get_logger(), "Unable to obtain joint state handle for %s",
-      traction_joint_name.c_str());
-    return CallbackReturn::ERROR;
-  }
-
-  // Create the traction joint instance
-  joint.emplace_back(TractionHandle{std::ref(*state_handle), std::ref(*command_handle)});
-  return CallbackReturn::SUCCESS;
+  auto command_handle =
+    find<LoanedCommandInterface>(traction_joint_name, HW_IF_VELOCITY, command_interfaces_);
+  // auto state_handle =
+  //   find<LoanedStateInterface>(traction_joint_name, HW_IF_VELOCITY, state_interfaces_);
+  // // Lookup the velocity state interface
+  // if (state_handle.second && command_handle.second)
+  // {
+  //   // Create the traction joint instance
+  //   joint.emplace_back(
+  //     TractionHandle{std::ref(state_handle.first), std::ref(command_handle.first)});
+  //   return CallbackReturn::SUCCESS;
+  // }
+  return CallbackReturn::ERROR;
 }
 
 CallbackReturn TricycleController::get_steering(
@@ -615,7 +613,7 @@ CallbackReturn TricycleController::get_steering(
   // Lookup the velocity command interface
   const auto command_handle = std::find_if(
     command_interfaces_.begin(), command_interfaces_.end(),
-    [&steering_joint_name](const hardware_interface::LoanedCommandInterface & interface)
+    [&steering_joint_name](const auto & interface)
     {
       return interface.get_name() == steering_joint_name &&
              interface.get_interface_name() == HW_IF_POSITION;

@@ -108,6 +108,10 @@ protected:
   double convert_trans_rot_vel_to_steering_angle(double v, double omega, double wheelbase);
   std::tuple<double, double> process_twist_command(double linear_command, double angular_command);
 
+  template <typename T>
+  std::pair<T, bool> find(
+    std::string joint_name, const char interface_name[], std::vector<T> &interfaces);
+
   std::string traction_joint_name_;
   std::string steering_joint_name_;
 
