@@ -600,7 +600,7 @@ CallbackReturn TricycleController::get_steering(
   // Lookup the velocity state interface
   const auto state_handle = std::find_if(
     state_interfaces_.cbegin(), state_interfaces_.cend(),
-    [&steering_joint_name, this](const auto & interface)
+    [&steering_joint_name](const auto & interface)
     {
       return interface.get_name() == steering_joint_name &&
              interface.get_interface_name() == HW_IF_POSITION;
