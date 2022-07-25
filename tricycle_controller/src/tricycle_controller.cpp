@@ -560,7 +560,7 @@ CallbackReturn TricycleController::get_traction(
     state_interfaces_.cbegin(), state_interfaces_.cend(),
     [&traction_joint_name](const auto & interface)
     {
-      return interface.get_prefix_name() == traction_joint_name &&
+      return interface.get_name() == traction_joint_name &&
              interface.get_interface_name() == HW_IF_VELOCITY;
     });
   if (state_handle == state_interfaces_.cend())
@@ -576,7 +576,7 @@ CallbackReturn TricycleController::get_traction(
     command_interfaces_.begin(), command_interfaces_.end(),
     [&traction_joint_name](const hardware_interface::LoanedCommandInterface & interface)
     {
-      return interface.get_prefix_name() == traction_joint_name &&
+      return interface.get_name() == traction_joint_name &&
              interface.get_interface_name() == HW_IF_VELOCITY;
     });
   if (command_handle == command_interfaces_.end())
@@ -602,7 +602,7 @@ CallbackReturn TricycleController::get_steering(
     state_interfaces_.cbegin(), state_interfaces_.cend(),
     [&steering_joint_name, this](const auto & interface)
     {
-      return interface.get_prefix_name() == steering_joint_name &&
+      return interface.get_name() == steering_joint_name &&
              interface.get_interface_name() == HW_IF_POSITION;
     });
   if (state_handle == state_interfaces_.cend())
@@ -618,7 +618,7 @@ CallbackReturn TricycleController::get_steering(
     command_interfaces_.begin(), command_interfaces_.end(),
     [&steering_joint_name](const hardware_interface::LoanedCommandInterface & interface)
     {
-      return interface.get_prefix_name() == steering_joint_name &&
+      return interface.get_name() == steering_joint_name &&
              interface.get_interface_name() == HW_IF_POSITION;
     });
   if (command_handle == command_interfaces_.end())

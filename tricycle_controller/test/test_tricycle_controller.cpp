@@ -32,7 +32,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "tricycle_controller/tricycle_controller.hpp"
 
-using CallbackReturn = controller_interface::CallbackReturn;
+using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 using hardware_interface::HW_IF_POSITION;
 using hardware_interface::HW_IF_VELOCITY;
 using hardware_interface::LoanedCommandInterface;
@@ -253,11 +253,11 @@ TEST_F(TestTricycleController, cleanup)
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(controller_->get_node()->get_node_base_interface());
-  auto state = controller_->get_node()->configure();
+  auto state = controller_->configure();
   ASSERT_EQ(State::PRIMARY_STATE_INACTIVE, state.id());
   assignResources();
 
-  state = controller_->get_node()->activate();
+  state = controller_->activate();
   ASSERT_EQ(State::PRIMARY_STATE_ACTIVE, state.id());
 
   waitForSetup();
@@ -272,13 +272,13 @@ TEST_F(TestTricycleController, cleanup)
     controller_->update(rclcpp::Time(0, 0, RCL_ROS_TIME), rclcpp::Duration::from_seconds(0.01)),
     controller_interface::return_type::OK);
 
-  state = controller_->get_node()->deactivate();
+  state = controller_->deactivate();
   ASSERT_EQ(State::PRIMARY_STATE_INACTIVE, state.id());
   ASSERT_EQ(
     controller_->update(rclcpp::Time(0, 0, RCL_ROS_TIME), rclcpp::Duration::from_seconds(0.01)),
     controller_interface::return_type::OK);
 
-  state = controller_->get_node()->cleanup();
+  state = controller_->cleanup();
   ASSERT_EQ(State::PRIMARY_STATE_UNCONFIGURED, state.id());
 
   // should be stopped
@@ -303,14 +303,14 @@ TEST_F(TestTricycleController, correct_initialization_using_parameters)
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(controller_->get_node()->get_node_base_interface());
 
-  auto state = controller_->get_node()->configure();
+  auto state = controller_->configure();
   assignResources();
 
   ASSERT_EQ(State::PRIMARY_STATE_INACTIVE, state.id());
   EXPECT_EQ(position_, steering_joint_pos_cmd_.get_value());
   EXPECT_EQ(velocity_, traction_joint_vel_cmd_.get_value());
 
-  state = controller_->get_node()->activate();
+  state = controller_->activate();
   ASSERT_EQ(State::PRIMARY_STATE_ACTIVE, state.id());
 
   // send msg
@@ -329,7 +329,7 @@ TEST_F(TestTricycleController, correct_initialization_using_parameters)
   // deactivated
   // wait so controller process the second point when deactivated
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  state = controller_->get_node()->deactivate();
+  state = controller_->deactivate();
   ASSERT_EQ(state.id(), State::PRIMARY_STATE_INACTIVE);
   ASSERT_EQ(
     controller_->update(rclcpp::Time(0, 0, RCL_ROS_TIME), rclcpp::Duration::from_seconds(0.01)),
@@ -339,12 +339,12 @@ TEST_F(TestTricycleController, correct_initialization_using_parameters)
   EXPECT_EQ(0.0, traction_joint_vel_cmd_.get_value()) << "Wheels are halted on deactivate()";
 
   // cleanup
-  state = controller_->get_node()->cleanup();
+  state = controller_->cleanup();
   ASSERT_EQ(State::PRIMARY_STATE_UNCONFIGURED, state.id());
   EXPECT_EQ(0.0, steering_joint_pos_cmd_.get_value());
   EXPECT_EQ(0.0, traction_joint_vel_cmd_.get_value());
 
-  state = controller_->get_node()->configure();
+  state = controller_->configure();
   ASSERT_EQ(State::PRIMARY_STATE_INACTIVE, state.id());
   executor.cancel();
 }
