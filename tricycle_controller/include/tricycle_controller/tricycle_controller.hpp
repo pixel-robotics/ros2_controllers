@@ -14,7 +14,6 @@
 
 /*
  * Author: Tony Najjar
- * Author: Sara Al Arab
  */
 
 #ifndef TRICYCLE_CONTROLLER__TRICYCLE_CONTROLLER_HPP_
@@ -107,7 +106,7 @@ protected:
   CallbackReturn get_steering(
     const std::string & steering_joint_name, std::vector<SteeringHandle> & joint);
   double convert_trans_rot_vel_to_steering_angle(double v, double omega, double wheelbase);
-  std::tuple<double, double> process_twist_command(double linear_command, double angular_command);
+  std::tuple<double, double> twist_to_ackermann(double linear_command, double angular_command);
 
   std::string traction_joint_name_;
   std::string steering_joint_name_;
@@ -118,8 +117,8 @@ protected:
 
   struct WheelParams
   {
-    double wheelbase = 0.0;  // w.r.t. the midpoint of the wheel width
-    double radius = 0.0;     // Assumed to be the same for both wheels
+    double wheelbase = 0.0;
+    double radius = 0.0;
   } wheel_params_;
 
   struct OdometryParams
@@ -166,8 +165,6 @@ protected:
   // speed limiters
   TractionLimiter limiter_traction_;
   SteeringLimiter limiter_steering_;
-
-  rclcpp::Time previous_update_timestamp_{0};
 
   // publish rate limiter
   double publish_rate_ = 50.0;

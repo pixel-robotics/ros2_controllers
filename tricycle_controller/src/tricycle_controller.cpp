@@ -14,7 +14,6 @@
 
 /*
  * Author: Tony Najjar
- * Author: Sara Al Arab
  */
 
 #include <memory>
@@ -68,10 +67,11 @@ CallbackReturn TricycleController::on_init()
     auto_declare<bool>("enable_odom_tf", odom_params_.enable_odom_tf);
     auto_declare<bool>("odom_only_twist", odom_params_.odom_only_twist);
 
-    auto_declare<double>("cmd_vel_timeout", cmd_vel_timeout_.count() / 1000.0);
+    auto_declare<int>("cmd_vel_timeout", cmd_vel_timeout_.count());
     auto_declare<bool>("publish_ackermann_command", publish_ackermann_command_);
     auto_declare<int>("velocity_rolling_window_size", 10);
     auto_declare<bool>("use_stamped_vel", use_stamped_vel_);
+    auto_declare<double>("publish_rate", publish_rate_);
 
     auto_declare<double>("traction.max_velocity", NAN);
     auto_declare<double>("traction.min_velocity", NAN);
@@ -88,7 +88,6 @@ CallbackReturn TricycleController::on_init()
     auto_declare<double>("steering.min_velocity", NAN);
     auto_declare<double>("steering.max_acceleration", NAN);
     auto_declare<double>("steering.min_acceleration", NAN);
-    auto_declare<double>("publish_rate", publish_rate_);
   }
   catch (const std::exception & e)
   {
@@ -118,13 +117,17 @@ InterfaceConfiguration TricycleController::state_interface_configuration() const
 }
 
 controller_interface::return_type TricycleController::update(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & time, const rclcpp::Duration & period)
 {
-  const auto current_time =
-    get_node()
-      ->get_clock()
-      ->now();  // original is current_time = time; time is always sim time when using gazebo_ros2_control. This is a hack to use system time instead.
-
+  if (get_state().id() == State::PRIMARY_STATE_INACTIVE)
+  {
+    if (!is_halted)
+    {
+      halt();
+      is_halted = true;
+    }
+    return controller_interface::return_type::OK;
+  }
   std::shared_ptr<TwistStamped> last_command_msg;
   received_velocity_msg_ptr_.get(last_command_msg);
   if (last_command_msg == nullptr)
@@ -133,7 +136,7 @@ controller_interface::return_type TricycleController::update(
     return controller_interface::return_type::ERROR;
   }
 
-  const auto age_of_last_command = current_time - last_command_msg->header.stamp;
+  const auto age_of_last_command = time - last_command_msg->header.stamp;
   // Brake if cmd_vel has timeout, override the stored command
   if (age_of_last_command > cmd_vel_timeout_)
   {
@@ -146,34 +149,34 @@ controller_interface::return_type TricycleController::update(
   TwistStamped command = *last_command_msg;
   double & linear_command = command.twist.linear.x;
   double & angular_command = command.twist.angular.z;
-
+  double Ws_read = traction_joint_[0].velocity_state.get().get_value();     // in radians/s
+  double alpha_read = steering_joint_[0].position_state.get().get_value();  // in radians
+  
   if (odom_params_.open_loop)
   {
-    odometry_.updateOpenLoop(linear_command, angular_command, current_time);
+    odometry_.updateOpenLoop(linear_command, angular_command, period);
   }
   else
   {
-    double Ws_read = traction_joint_[0].velocity_state.get().get_value();     // in radians/s
-    double alpha_read = steering_joint_[0].position_state.get().get_value();  // in radians
     if (std::isnan(Ws_read) || std::isnan(alpha_read))
     {
       RCLCPP_ERROR(get_node()->get_logger(), "Could not read feeback value");
       return controller_interface::return_type::ERROR;
     }
-    odometry_.updateFromVelocity(Ws_read, alpha_read, current_time);
+    odometry_.update(Ws_read, alpha_read, period);
   }
 
   tf2::Quaternion orientation;
   orientation.setRPY(0.0, 0.0, odometry_.getHeading());
 
-  if (previous_publish_timestamp_ + publish_period_ < current_time)
+  if (previous_publish_timestamp_ + publish_period_ < time)
   {
     previous_publish_timestamp_ += publish_period_;
 
     if (realtime_odometry_publisher_->trylock())
     {
       auto & odometry_message = realtime_odometry_publisher_->msg_;
-      odometry_message.header.stamp = current_time;
+      odometry_message.header.stamp = time;
       if (!odom_params_.odom_only_twist)
       {
         odometry_message.pose.pose.position.x = odometry_.getX();
@@ -191,7 +194,7 @@ controller_interface::return_type TricycleController::update(
     if (odom_params_.enable_odom_tf && realtime_odometry_transform_publisher_->trylock())
     {
       auto & transform = realtime_odometry_transform_publisher_->msg_.transforms.front();
-      transform.header.stamp = current_time;
+      transform.header.stamp = time;
       transform.transform.translation.x = odometry_.getX();
       transform.transform.translation.y = odometry_.getY();
       transform.transform.rotation.x = orientation.x();
@@ -203,13 +206,10 @@ controller_interface::return_type TricycleController::update(
   }
 
   // Compute wheel velocity and angle
-  auto [alpha_write, Ws_write] = process_twist_command(linear_command, angular_command);
+  auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
 
-  // Accelerate gradually until when steering motor has reached target angle
-  // Increase power to make it more strict (i.e to make it slower when angle difference is big)
-  // TODO: find the best function profile, e.g convex power functions
-  // TODO: Is there a better/more generic way to take into consideration motor velocity/acceleration limitations?
-  double alpha_delta = abs(alpha_write - steering_joint_[0].position_state.get().get_value());
+  // Reduce wheel speed until the target angle has been reached 
+  double alpha_delta = abs(alpha_write - alpha_read);
   double scale;
   if (alpha_delta < M_PI / 6)
   {
@@ -221,22 +221,20 @@ controller_interface::return_type TricycleController::update(
   }
   else
   {
+    // TODO: find the best function, e.g convex power functions
     scale = cos(alpha_delta);
   }
   Ws_write *= scale;
-
-  const auto update_dt = current_time - previous_update_timestamp_;
-  previous_update_timestamp_ = current_time;
 
   auto & last_command = previous_commands_.back();
   auto & second_to_last_command = previous_commands_.front();
 
   limiter_traction_.limit(
-    Ws_write, last_command.speed, second_to_last_command.speed, update_dt.seconds());
+    Ws_write, last_command.speed, second_to_last_command.speed, period.seconds());
 
   limiter_steering_.limit(
     alpha_write, last_command.steering_angle, second_to_last_command.steering_angle,
-    update_dt.seconds());
+    period.seconds());
 
   previous_commands_.pop();
   AckermannDrive ackermann_command;
@@ -300,10 +298,12 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
   odom_params_.enable_odom_tf = get_node()->get_parameter("enable_odom_tf").as_bool();
   odom_params_.odom_only_twist = get_node()->get_parameter("odom_only_twist").as_bool();
 
-  cmd_vel_timeout_ = std::chrono::milliseconds{
-    static_cast<int>(get_node()->get_parameter("cmd_vel_timeout").as_double() * 1000.0)};
+  cmd_vel_timeout_ = std::chrono::milliseconds{get_node()->get_parameter("cmd_vel_timeout").as_int()};
   publish_ackermann_command_ = get_node()->get_parameter("publish_ackermann_command").as_bool();
   use_stamped_vel_ = get_node()->get_parameter("use_stamped_vel").as_bool();
+
+  publish_rate_ = get_node()->get_parameter("publish_rate").as_double();
+  publish_period_ = rclcpp::Duration::from_seconds(1.0 / publish_rate_);
 
   try
   {
@@ -418,9 +418,6 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
   odometry_message.header.frame_id = odom_params_.odom_frame_id;
   odometry_message.child_frame_id = odom_params_.base_frame_id;
 
-  // limit the publication on the topics /odom and /tf
-  publish_rate_ = get_node()->get_parameter("publish_rate").as_double();
-  publish_period_ = rclcpp::Duration::from_seconds(1.0 / publish_rate_);
   previous_publish_timestamp_ = get_node()->get_clock()->now();
 
   // initialize odom values zeros
@@ -459,7 +456,6 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
                                   &TricycleController::reset_odometry, this, std::placeholders::_1,
                                   std::placeholders::_2, std::placeholders::_3));
 
-  previous_update_timestamp_ = get_node()->get_clock()->now();
   return CallbackReturn::SUCCESS;
 }
 
@@ -548,7 +544,11 @@ CallbackReturn TricycleController::on_shutdown(const rclcpp_lifecycle::State &)
   return CallbackReturn::SUCCESS;
 }
 
-void TricycleController::halt() { traction_joint_[0].velocity_command.get().set_value(0.0); }
+void TricycleController::halt()
+{
+  traction_joint_[0].velocity_command.get().set_value(0.0);
+  steering_joint_[0].position_command.get().set_value(0.0);
+}
 
 CallbackReturn TricycleController::get_traction(
   const std::string & traction_joint_name, std::vector<TractionHandle> & joint)
@@ -644,7 +644,7 @@ double TricycleController::convert_trans_rot_vel_to_steering_angle(
   return std::atan(theta_dot * wheelbase / Vx);
 }
 
-std::tuple<double, double> TricycleController::process_twist_command(double Vx, double theta_dot)
+std::tuple<double, double> TricycleController::twist_to_ackermann(double Vx, double theta_dot)
 {
   // using naming convention in http://users.isr.ist.utl.pt/~mir/cadeiras/robmovel/Kinematics.pdf
   double alpha, Ws;

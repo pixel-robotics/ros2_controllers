@@ -336,7 +336,7 @@ double get_value(
 }
 
 controller_interface::return_type JointStateBroadcaster::update(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
   for (const auto & state_interface : state_interfaces_)
   {
@@ -355,7 +355,7 @@ controller_interface::return_type JointStateBroadcaster::update(
   if (realtime_joint_state_publisher_ && realtime_joint_state_publisher_->trylock())
   {
     auto & joint_state_msg = realtime_joint_state_publisher_->msg_;
-    joint_state_msg.header.stamp = clock_.now();
+    joint_state_msg.header.stamp = time;
 
     // update joint state message and dynamic joint state message
     for (size_t i = 0; i < joint_names_.size(); ++i)
@@ -372,7 +372,7 @@ controller_interface::return_type JointStateBroadcaster::update(
   if (realtime_dynamic_joint_state_publisher_ && realtime_dynamic_joint_state_publisher_->trylock())
   {
     auto & dynamic_joint_state_msg = realtime_dynamic_joint_state_publisher_->msg_;
-    dynamic_joint_state_msg.header.stamp = clock_.now();
+    dynamic_joint_state_msg.header.stamp = time;
     for (size_t joint_index = 0; joint_index < dynamic_joint_state_msg.joint_names.size();
          ++joint_index)
     {
