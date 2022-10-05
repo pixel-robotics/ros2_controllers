@@ -112,7 +112,7 @@ SegmentTolerances get_segment_tolerances(
     node.get_parameter_or<double>(
       prefix + ".trajectory", tolerances.state_tolerance[i].position, 0.0);
     node.get_parameter_or<double>(
-      prefix + ".goal", tolerances.goal_state_tolerance[i].position, 0.0);
+      prefix + ".goal", tolerances.goal_state_tolerance[i].position, 0.01);
 
     auto logger = rclcpp::get_logger("tolerance");
     RCLCPP_DEBUG(
