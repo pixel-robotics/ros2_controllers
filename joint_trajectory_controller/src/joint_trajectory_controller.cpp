@@ -247,7 +247,7 @@ controller_interface::return_type JointTrajectoryController::update(
         active_goal->setFeedback(feedback);
 
         // check abort
-        if (abort || outside_goal_tolerance)
+        if (abort)
         {
           auto result = std::make_shared<FollowJTrajAction::Result>();
 
@@ -256,11 +256,7 @@ controller_interface::return_type JointTrajectoryController::update(
             RCLCPP_WARN(node_->get_logger(), "Aborted due to state tolerance violation");
             result->set__error_code(FollowJTrajAction::Result::PATH_TOLERANCE_VIOLATED);
           }
-          else if (outside_goal_tolerance)
-          {
-            RCLCPP_WARN(node_->get_logger(), "Aborted due to goal tolerance violation");
-            result->set__error_code(FollowJTrajAction::Result::GOAL_TOLERANCE_VIOLATED);
-          }
+
           active_goal->setAborted(result);
           // TODO(matthew-reynolds): Need a lock-free write here
           // See https://github.com/ros-controls/ros2_controllers/issues/168
