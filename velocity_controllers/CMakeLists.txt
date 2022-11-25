@@ -25,6 +25,7 @@ endforeach()
 add_library(${PROJECT_NAME}
   SHARED
   src/joint_group_velocity_controller.cpp
+  src/joint_position_controller.cpp
 )
 target_include_directories(${PROJECT_NAME} PRIVATE include)
 ament_target_dependencies(${PROJECT_NAME}
