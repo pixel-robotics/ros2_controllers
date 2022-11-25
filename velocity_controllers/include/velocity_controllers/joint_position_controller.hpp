@@ -22,11 +22,13 @@
 #include <utility>
 #include <vector>
 
+#include "control_msgs/action/follow_joint_trajectory.hpp"
 #include "control_msgs/action/single_joint_position.hpp"
+#include "control_msgs/msg/joint_trajectory_controller_state.hpp"
 #include "control_toolbox/pid.hpp"
 #include "controller_interface/controller_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "joint_position_controller/visibility_control.h"
+#include "velocity_controllers/visibility_control.h"
 #include "rclcpp/duration.hpp"
 #include "rclcpp/subscription.hpp"
 #include "rclcpp/time.hpp"
@@ -60,53 +62,53 @@ class Trajectory;
 class JointPositionController : public controller_interface::ControllerInterface
 {
 public:
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   JointPositionController();
 
   /**
    * @brief command_interface_configuration This controller requires the position command
    * interfaces for the controlled joints
    */
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   controller_interface::InterfaceConfiguration command_interface_configuration() const override;
 
   /**
    * @brief command_interface_configuration This controller requires the position and velocity
    * state interfaces for the controlled joints
    */
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   controller_interface::return_type update(
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   controller_interface::CallbackReturn on_init() override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   controller_interface::CallbackReturn on_configure(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   controller_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
-  controller_interface::CallbackReturn on_deactivate(
-    const rclcpp_lifecycle::State & previous_state) override;
+  // VELOCITY_CONTROLLERS_PUBLIC
+  // controller_interface::CallbackReturn on_deactivate(
+  //   const rclcpp_lifecycle::State & previous_state) override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
-  controller_interface::CallbackReturn on_cleanup(
-    const rclcpp_lifecycle::State & previous_state) override;
+  // VELOCITY_CONTROLLERS_PUBLIC
+  // controller_interface::CallbackReturn on_cleanup(
+  //   const rclcpp_lifecycle::State & previous_state) override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
-  controller_interface::CallbackReturn on_error(
-    const rclcpp_lifecycle::State & previous_state) override;
+  // VELOCITY_CONTROLLERS_PUBLIC
+  // controller_interface::CallbackReturn on_error(
+  //   const rclcpp_lifecycle::State & previous_state) override;
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
-  controller_interface::CallbackReturn on_shutdown(
-    const rclcpp_lifecycle::State & previous_state) override;
+  // VELOCITY_CONTROLLERS_PUBLIC
+  // controller_interface::CallbackReturn on_shutdown(
+  //   const rclcpp_lifecycle::State & previous_state) override;
 
 protected:
   std::string joint_name_;
@@ -132,8 +134,10 @@ protected:
   };
 
   std::vector<JointHandle> joint_;
+  controller_interface::CallbackReturn get_joint(
+    const std::string & joint_name, std::vector<JointHandle> & joint);
 
-  using ControllerStateMsg = control_msgs::msg::JointPositionControllerState;
+  using ControllerStateMsg = control_msgs::msg::JointTrajectoryControllerState;
   using StatePublisher = realtime_tools::RealtimePublisher<ControllerStateMsg>;
   using StatePublisherPtr = std::unique_ptr<StatePublisher>;
   rclcpp::Publisher<ControllerStateMsg>::SharedPtr publisher_;
@@ -142,35 +146,35 @@ protected:
   rclcpp::Duration state_publisher_period_ = rclcpp::Duration(20ms);
   rclcpp::Time last_state_publish_time_;
 
-  using FollowJTrajAction = control_msgs::action::FollowJointTrajectory;
-  using RealtimeGoalHandle = realtime_tools::RealtimeServerGoalHandle<FollowJTrajAction>;
+  using SingleJointPositionAction = control_msgs::action::SingleJointPosition;
+  using RealtimeGoalHandle = realtime_tools::RealtimeServerGoalHandle<SingleJointPositionAction>;
   using RealtimeGoalHandlePtr = std::shared_ptr<RealtimeGoalHandle>;
   using RealtimeGoalHandleBuffer = realtime_tools::RealtimeBuffer<RealtimeGoalHandlePtr>;
 
-  rclcpp_action::Server<FollowJTrajAction>::SharedPtr action_server_;
+  rclcpp_action::Server<SingleJointPositionAction>::SharedPtr action_server_;
   RealtimeGoalHandleBuffer rt_active_goal_;  ///< Currently active action goal, if any.
   rclcpp::TimerBase::SharedPtr goal_handle_timer_;
   rclcpp::Duration action_monitor_period_ = rclcpp::Duration(50ms);
 
   // callbacks for action_server_
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   rclcpp_action::GoalResponse goal_received_callback(
-    const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowJTrajAction::Goal> goal);
-  JOINT_POSITION_CONTROLLER_PUBLIC
+    const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const SingleJointPositionAction::Goal> goal);
+  VELOCITY_CONTROLLERS_PUBLIC
   rclcpp_action::CancelResponse goal_cancelled_callback(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJTrajAction>> goal_handle);
-  JOINT_POSITION_CONTROLLER_PUBLIC
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<SingleJointPositionAction>> goal_handle);
+  VELOCITY_CONTROLLERS_PUBLIC
   void goal_accepted_callback(
-    std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJTrajAction>> goal_handle);
+    std::shared_ptr<rclcpp_action::ServerGoalHandle<SingleJointPositionAction>> goal_handle);
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
-  void preempt_active_goal();
+  // VELOCITY_CONTROLLERS_PUBLIC
+  // void preempt_active_goal();
 
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   bool reset();
 
   using JointTrajectoryPoint = trajectory_msgs::msg::JointTrajectoryPoint;
-  JOINT_POSITION_CONTROLLER_PUBLIC
+  VELOCITY_CONTROLLERS_PUBLIC
   void publish_state(
     const JointTrajectoryPoint & desired_state, const JointTrajectoryPoint & current_state,
     const JointTrajectoryPoint & state_error);

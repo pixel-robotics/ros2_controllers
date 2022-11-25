@@ -23,13 +23,11 @@
 #include <string>
 #include <vector>
 
-#include "angles/angles.h"
 #include "builtin_interfaces/msg/duration.hpp"
 #include "builtin_interfaces/msg/time.hpp"
 #include "controller_interface/helpers.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "joint_position_controller/trajectory.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/parameter.hpp"
@@ -45,6 +43,11 @@
 
 namespace joint_position_controller
 {
+
+using hardware_interface::HW_IF_POSITION;
+using hardware_interface::HW_IF_VELOCITY;
+
+
 JointPositionController::JointPositionController()
 : controller_interface::ControllerInterface()
 {
@@ -55,7 +58,7 @@ controller_interface::CallbackReturn JointPositionController::on_init()
   try
   {
     // with the lifecycle node being initialized, we can declare parameters
-    joint_name_ = auto_declare<std::vector<std::string>>("joint", joint_name_);
+    joint_name_ = auto_declare<std::string>("joint", joint_name_);
     open_loop_control_ = auto_declare<bool>("open_loop_control", open_loop_control_);
     state_publish_rate_ = auto_declare<double>("state_publish_rate", 50.0);
     action_monitor_rate_ = auto_declare<double>("action_monitor_rate", 20.0);
@@ -149,7 +152,7 @@ controller_interface::CallbackReturn JointPositionController::on_configure(
   action_monitor_period_ = rclcpp::Duration::from_seconds(1.0 / action_monitor_rate_);
 
   using namespace std::placeholders;
-  action_server_ = rclcpp_action::create_server<FollowJTrajAction>(
+  action_server_ = rclcpp_action::create_server<SingleJointPositionAction>(
     get_node()->get_node_base_interface(), get_node()->get_node_clock_interface(),
     get_node()->get_node_logging_interface(), get_node()->get_node_waitables_interface(),
     std::string(get_node()->get_name()) + "/follow_joint_trajectory",
@@ -160,15 +163,15 @@ controller_interface::CallbackReturn JointPositionController::on_configure(
   return CallbackReturn::SUCCESS;
 }
 
-// controller_interface::CallbackReturn JointPositionController::on_activate(
-//   const rclcpp_lifecycle::State &)
-// {
-//   if (get_joint(joint_name_, joint_) == CallbackReturn::ERROR)
-//   {
-//     return CallbackReturn::ERROR;
-//   }
-//   return CallbackReturn::SUCCESS;
-// }
+controller_interface::CallbackReturn JointPositionController::on_activate(
+  const rclcpp_lifecycle::State &)
+{
+  if (get_joint(joint_name_, joint_) == CallbackReturn::ERROR)
+  {
+    return CallbackReturn::ERROR;
+  }
+  return CallbackReturn::SUCCESS;
+}
 
 // controller_interface::CallbackReturn JointPositionController::on_deactivate(
 //   const rclcpp_lifecycle::State &)
@@ -277,12 +280,6 @@ void JointPositionController::publish_state(
     state_publisher_->msg_.desired.accelerations = desired_state.accelerations;
     state_publisher_->msg_.actual.positions = current_state.positions;
     state_publisher_->msg_.error.positions = state_error.positions;
-    if (has_velocity_state_interface_)
-    {
-      state_publisher_->msg_.actual.velocities = current_state.velocities;
-      state_publisher_->msg_.error.velocities = state_error.velocities;
-    }
-    if (has_acceleration_state_interface_)
     {
       state_publisher_->msg_.actual.accelerations = current_state.accelerations;
       state_publisher_->msg_.error.accelerations = state_error.accelerations;
@@ -293,7 +290,7 @@ void JointPositionController::publish_state(
 }
 
 rclcpp_action::GoalResponse JointPositionController::goal_received_callback(
-  const rclcpp_action::GoalUUID &, std::shared_ptr<const FollowJTrajAction::Goal> goal)
+  const rclcpp_action::GoalUUID &, std::shared_ptr<const SingleJointPositionAction::Goal> goal)
 {
   RCLCPP_INFO(get_node()->get_logger(), "Received new action goal");
 
@@ -305,17 +302,12 @@ rclcpp_action::GoalResponse JointPositionController::goal_received_callback(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  if (!validate_trajectory_msg(goal->trajectory))
-  {
-    return rclcpp_action::GoalResponse::REJECT;
-  }
-
   RCLCPP_INFO(get_node()->get_logger(), "Accepted new action goal");
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse JointPositionController::goal_cancelled_callback(
-  const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJTrajAction>> goal_handle)
+  const std::shared_ptr<rclcpp_action::ServerGoalHandle<SingleJointPositionAction>> goal_handle)
 {
   RCLCPP_INFO(get_node()->get_logger(), "Got request to cancel goal");
 
@@ -331,7 +323,7 @@ rclcpp_action::CancelResponse JointPositionController::goal_cancelled_callback(
       get_node()->get_logger(), "Canceling active action goal because cancel callback received.");
 
     // Mark the current goal as canceled
-    auto action_res = std::make_shared<FollowJTrajAction::Result>();
+    auto action_res = std::make_shared<SingleJointPositionAction::Result>();
     active_goal->setCanceled(action_res);
     rt_active_goal_.writeFromNonRT(RealtimeGoalHandlePtr());
   }
@@ -339,20 +331,20 @@ rclcpp_action::CancelResponse JointPositionController::goal_cancelled_callback(
 }
 
 void JointPositionController::goal_accepted_callback(
-  std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJTrajAction>> goal_handle)
+  std::shared_ptr<rclcpp_action::ServerGoalHandle<SingleJointPositionAction>> goal_handle)
 {
   // Update new trajectory
   {
-    preempt_active_goal();
+    // preempt_active_goal();
     auto traj_msg =
       std::make_shared<trajectory_msgs::msg::JointTrajectory>(goal_handle->get_goal()->trajectory);
 
-    add_new_trajectory_msg(traj_msg);
+    //add_new_trajectory_msg(traj_msg);
   }
 
   // Update the active goal
   RealtimeGoalHandlePtr rt_goal = std::make_shared<RealtimeGoalHandle>(goal_handle);
-  rt_goal->preallocated_feedback_->joint_names = joint_name_;
+//   rt_goal->preallocated_feedback_->joint_names = joint_name_;
   rt_goal->execute();
   rt_active_goal_.writeFromNonRT(rt_goal);
 
@@ -361,19 +353,9 @@ void JointPositionController::goal_accepted_callback(
     action_monitor_period_.to_chrono<std::chrono::seconds>(),
     std::bind(&RealtimeGoalHandle::runNonRealtime, rt_goal));
 }
-{
-  point.positions.resize(size, 0.0);
-  if (has_velocity_state_interface_)
-  {
-    point.velocities.resize(size, 0.0);
-  }
-  if (has_acceleration_state_interface_)
-  {
-    point.accelerations.resize(size, 0.0);
-  }
-}
 
-CallbackReturn TricycleController::get_joint(
+
+controller_interface::CallbackReturn JointPositionController::get_joint(
   const std::string & joint_name, std::vector<JointHandle> & joint)
 {
   RCLCPP_INFO(get_node()->get_logger(), "Get Wheel Joint Instance");
@@ -381,32 +363,32 @@ CallbackReturn TricycleController::get_joint(
   // Lookup the position state interface
   const auto state_handle = std::find_if(
     state_interfaces_.cbegin(), state_interfaces_.cend(),
-    [&traction_joint_name](const auto & interface)
+    [&joint_name](const auto & interface)
     {
-      return interface.get_prefix_name() == traction_joint_name &&
+      return interface.get_prefix_name() == joint_name &&
              interface.get_interface_name() == HW_IF_POSITION;
     });
   if (state_handle == state_interfaces_.cend())
   {
     RCLCPP_ERROR(
       get_node()->get_logger(), "Unable to obtain joint state handle for %s",
-      traction_joint_name.c_str());
+      joint_name.c_str());
     return CallbackReturn::ERROR;
   }
 
   // Lookup the velocity command interface
   const auto command_handle = std::find_if(
     command_interfaces_.begin(), command_interfaces_.end(),
-    [&traction_joint_name](const auto & interface)
+    [&joint_name](const auto & interface)
     {
-      return interface.get_prefix_name() == traction_joint_name &&
+      return interface.get_prefix_name() == joint_name &&
              interface.get_interface_name() == HW_IF_VELOCITY;
     });
   if (command_handle == command_interfaces_.end())
   {
     RCLCPP_ERROR(
       get_node()->get_logger(), "Unable to obtain joint command handle for %s",
-      traction_joint_name.c_str());
+      joint_name.c_str());
     return CallbackReturn::ERROR;
   }
 
