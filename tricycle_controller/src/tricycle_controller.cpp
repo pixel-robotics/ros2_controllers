@@ -194,18 +194,8 @@ controller_interface::return_type TricycleController::update(
   if (realtime_twist_publisher_->trylock())
   {
     auto & twist_message = realtime_twist_publisher_->msg_;
-    twist_message.header.stamp = time;
-    // if (!odom_params_.odom_only_twist)
-    // {
-    //   odometry_message.pose.pose.position.x = odometry_.getX();
-    //   odometry_message.pose.pose.position.y = odometry_.getY();
-    //   odometry_message.pose.pose.orientation.x = orientation.x();
-    //   odometry_message.pose.pose.orientation.y = orientation.y();
-    //   odometry_message.pose.pose.orientation.z = orientation.z();
-    //   odometry_message.pose.pose.orientation.w = orientation.w();
-    // }
-    twist_message.twist.twist.linear.x = odometry_.getLinear();
-    twist_message.twist.twist.angular.z = odometry_.getAngular();
+    twist_message.linear.x = odometry_.getLinear();
+    twist_message.angular.z = odometry_.getAngular();
     realtime_twist_publisher_->unlockAndPublish();
   }
 
