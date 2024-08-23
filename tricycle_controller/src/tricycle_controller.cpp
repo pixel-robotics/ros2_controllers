@@ -33,6 +33,7 @@ namespace
 constexpr auto DEFAULT_COMMAND_TOPIC = "~/cmd_vel";
 constexpr auto DEFAULT_ACKERMANN_OUT_TOPIC = "~/cmd_ackermann";
 constexpr auto DEFAULT_ODOMETRY_TOPIC = "~/odom";
+constexpr auto DEFAULT_TWIST_TOPIC= "~/odom/twist";
 constexpr auto DEFAULT_TRANSFORM_TOPIC = "/tf";
 constexpr auto DEFAULT_RESET_ODOM_SERVICE = "~/reset_odometry";
 constexpr auto DEFAULT_SET_EXACT_MODE_SERVICE = "~/set_exact_mode";
@@ -188,6 +189,24 @@ controller_interface::return_type TricycleController::update(
     odometry_message.twist.twist.linear.x = odometry_.getLinear();
     odometry_message.twist.twist.angular.z = odometry_.getAngular();
     realtime_odometry_publisher_->unlockAndPublish();
+  }
+
+  if (realtime_twist_publisher_->trylock())
+  {
+    auto & twist_message = realtime_twist_publisher_->msg_;
+    twist_message.header.stamp = time;
+    // if (!odom_params_.odom_only_twist)
+    // {
+    //   odometry_message.pose.pose.position.x = odometry_.getX();
+    //   odometry_message.pose.pose.position.y = odometry_.getY();
+    //   odometry_message.pose.pose.orientation.x = orientation.x();
+    //   odometry_message.pose.pose.orientation.y = orientation.y();
+    //   odometry_message.pose.pose.orientation.z = orientation.z();
+    //   odometry_message.pose.pose.orientation.w = orientation.w();
+    // }
+    twist_message.twist.twist.linear.x = odometry_.getLinear();
+    twist_message.twist.twist.angular.z = odometry_.getAngular();
+    realtime_twist_publisher_->unlockAndPublish();
   }
 
   if (odom_params_.enable_odom_tf && realtime_odometry_transform_publisher_->trylock())
@@ -431,6 +450,12 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
   realtime_odometry_publisher_ =
     std::make_shared<realtime_tools::RealtimePublisher<nav_msgs::msg::Odometry>>(
       odometry_publisher_);
+
+  twist_publisher_ = get_node()->create_publisher<geometry_msgs::msg::Twist>(
+    DEFAULT_TWIST_TOPIC, rclcpp::SystemDefaultsQoS());
+  realtime_twist_publisher_ =
+    std::make_shared<realtime_tools::RealtimePublisher<geometry_msgs::msg::Twist>>(
+      twist_publisher_);
 
   auto & odometry_message = realtime_odometry_publisher_->msg_;
   odometry_message.header.frame_id = odom_params_.odom_frame_id;
