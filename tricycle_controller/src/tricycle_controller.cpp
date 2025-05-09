@@ -89,6 +89,38 @@ InterfaceConfiguration TricycleController::state_interface_configuration() const
 controller_interface::return_type TricycleController::update(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
+  if (param_listener_->is_old(params_))
+  {
+    params_ = param_listener_->get_params();
+
+    RCLCPP_INFO(logger, "Parameters were updated");
+    try
+      {
+        limiter_traction_ = TractionLimiter(
+          params_.traction.min_velocity, params_.traction.max_velocity,
+          params_.traction.min_acceleration, params_.traction.max_acceleration,
+          params_.traction.min_deceleration, params_.traction.max_deceleration,
+          params_.traction.min_jerk, params_.traction.max_jerk);
+      }
+      catch (const std::invalid_argument & e)
+      {
+        RCLCPP_ERROR(get_node()->get_logger(), "Error configuring traction limiter: %s", e.what());
+        return CallbackReturn::ERROR;
+      }
+      try
+      {
+        limiter_steering_ = SteeringLimiter(
+          params_.steering.min_position, params_.steering.max_position, params_.steering.min_velocity,
+          params_.steering.max_velocity, params_.steering.min_acceleration,
+          params_.steering.max_acceleration);
+      }
+      catch (const std::invalid_argument & e)
+      {
+        RCLCPP_ERROR(get_node()->get_logger(), "Error configuring steering limiter: %s", e.what());
+        return CallbackReturn::ERROR;
+      }
+
+    }
   // if the mutex is unable to lock, last_command_msg_ won't be updated
   received_velocity_msg_ptr_.try_get([this](const std::shared_ptr<TwistStamped> & msg)
                                      { last_command_msg_ = msg; });
