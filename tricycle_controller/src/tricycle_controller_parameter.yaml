@@ -252,7 +252,7 @@ tricycle_controller:
       description: "Speed breakpoints for clipping."
     }
     angle_limits: {
-      type: double_arra,
+      type: double_array,
       default_value: [ 1.5708, 1.5708, 1.5708, 1.5708, 0.567232, 0.1 ],
       description: "Steering‑angle limits corresponding to the speed breakpoints."
     }
