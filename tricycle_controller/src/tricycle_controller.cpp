@@ -86,6 +86,52 @@ InterfaceConfiguration TricycleController::state_interface_configuration() const
   return state_interfaces_config;
 }
 
+void TricycleController::clip_speed_for_angle(
+  double & wheel_speed,
+  double steering_angle)
+{
+  const auto & speed_limits = params_.clipping.speed_limits;
+  const auto & angle_limits = params_.clipping.angle_limits;
+  double speed_scale         = 0.1;
+  double speed_offset_factor = 0.98;
+  double min_speed = 0.0, max_speed = 0.0;
+
+  for (size_t i = 0; i < angle_limits.size(); ++i) {
+    if (angle_limits[i] >= std::abs(steering_angle)) {
+      if (speed_limits[i] < min_speed) {
+        min_speed = speed_limits[i] + speed_scale;
+      }
+      if (i+1 < speed_limits.size() && speed_limits[i+1] > max_speed) {
+        max_speed = speed_limits[i+1]*speed_offset_factor - speed_scale;
+      }
+    }
+  }
+  wheel_speed = std::clamp(wheel_speed, min_speed, max_speed);
+}
+
+void TricycleController::clip_angle_for_speed(
+  double & steering_angle,
+  double   wheel_speed)
+{
+  const auto & speed_limits = params_.clipping.speed_limits;
+  const auto & angle_limits = params_.clipping.angle_limits;
+  auto loc = std::lower_bound(speed_limits.begin(),
+                              speed_limits.end(),
+                              std::abs(wheel_speed));
+  int idx = int(loc - speed_limits.begin()) - 1;
+  idx = std::clamp(idx, 0, int(angle_limits.size()) - 1);
+
+  double angle_limit = angle_limits[idx];
+  steering_angle = std::clamp(steering_angle, -angle_limit, angle_limit);
+}
+
+void TricycleController::clip_wheel_speed_and_steering_angle(
+  double & wheel_speed, double & steering_angle)
+{
+  clip_speed_for_angle(wheel_speed, steering_angle);
+  clip_angle_for_speed(steering_angle, wheel_speed);
+}
+
 controller_interface::return_type TricycleController::update(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
@@ -164,6 +210,12 @@ controller_interface::return_type TricycleController::update(
 
   // Compute wheel velocity and angle
   auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
+
+  // Clip
+  if (params_.use_clipping && (std::abs(Ws_write) > 1e-6 || std::abs(alpha_write) > 1e-6))
+  {
+    clip_wheel_speed_and_steering_angle(Ws_write, alpha_write);
+  }
 
   double alpha_delta = abs(alpha_write - alpha_read);
   double scale;

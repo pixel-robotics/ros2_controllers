@@ -155,6 +155,9 @@ protected:
     const std::shared_ptr<rmw_request_id_t> request_header,
     const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
     std::shared_ptr<std_srvs::srv::SetBool::Response> res);
+  void clip_wheel_speed_and_steering_angle(double & wheel_speed, double & steering_angle);
+  void clip_speed_for_angle(double & wheel_speed, double steering_angle);
+  void clip_angle_for_speed(double & steering_angle, double wheel_speed);
   bool reset();
   void halt();
 };
