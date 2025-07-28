@@ -211,6 +211,17 @@ controller_interface::return_type TricycleController::update(
   // Compute wheel velocity and angle
   auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
 
+  // When steering angle slightly exceeds max turning rate at high speed, it should be capped to this rate
+  if (Ws_write >= 8.0 &&
+      std::abs(alpha_write) > params_.steering_angle_limit_high_speed  &&
+      std::abs(alpha_write) < params_.steering_angle_limit_high_speed + params_.high_speed_steering_limit_threshold)
+  {
+    alpha_write = std::clamp(
+      alpha_write,
+      -params_.steering_angle_limit_high_speed ,
+       params_.steering_angle_limit_high_speed );
+  }
+
   // Clip
   if (params_.use_clipping && (std::abs(Ws_write) > 1e-6 || std::abs(alpha_write) > 1e-6))
   {

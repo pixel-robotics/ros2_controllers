@@ -256,3 +256,13 @@ tricycle_controller:
       default_value: [ 1.5708, 1.5708, 1.5708, 1.5708, 0.567232, 0.1 ],
       description: "Steering‑angle limits corresponding to the speed breakpoints."
     }
+  high_speed_steering_limit_threshold: {
+    type: double,
+    default_value: 0.0349,
+    description: "Soft‑clamp range past the hard steering limit.",
+  }
+  steering_angle_limit_high_speed: {
+    type: double,
+    default_value: 0.0645772,
+    description: "Hard steering‐angle limit (rad) used at high speed.",
+  }
