@@ -160,20 +160,6 @@ controller_interface::return_type TricycleController::update(
   double Ws_read = traction_joint_[0].velocity_state.get().get_value();     // in radians/s
   double alpha_read = steering_joint_[0].position_state.get().get_value();  // in radians
 
-  if (params_.open_loop)
-  {
-    odometry_.updateOpenLoop(linear_command, angular_command, period);
-  }
-  else
-  {
-    if (std::isnan(Ws_read) || std::isnan(alpha_read))
-    {
-      RCLCPP_ERROR(get_node()->get_logger(), "Could not read feedback value");
-      return controller_interface::return_type::ERROR;
-    }
-    odometry_.update(Ws_read, alpha_read, period);
-  }
-
   tf2::Quaternion orientation;
   orientation.setRPY(0.0, 0.0, odometry_.getHeading());
 
@@ -211,7 +197,7 @@ controller_interface::return_type TricycleController::update(
   // Compute wheel velocity and angle
   auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
 
-  // When steering angle slightly exceeds max turning rate at high speed, it should be capped to this rate
+  // When steering angle slightly exceeds max turning rate at high speed, it should be capped to steering_angle_limit_high_speed
   if (Ws_write >= params_.high_speed_threshold &&
       std::abs(alpha_write) > params_.steering_angle_limit_high_speed  &&
       std::abs(alpha_write) < params_.steering_angle_limit_high_speed + params_.high_speed_steering_limit_threshold)
@@ -220,6 +206,17 @@ controller_interface::return_type TricycleController::update(
       alpha_write,
       -params_.steering_angle_limit_high_speed ,
        params_.steering_angle_limit_high_speed );
+  }
+
+  // When steering angle slightly exceeds max turning rate during tur at high speed, it should be capped to steering_angle_turning_limit_high_speed
+  if (Ws_write >= params_.high_speed_turning_threshold &&
+      std::abs(alpha_write) > params_.steering_angle_turning_limit_high_speed  &&
+      std::abs(alpha_write) < params_.steering_angle_turning_limit_high_speed + params_.high_speed_turning_steering_limit_threshold)
+  {
+    alpha_write = std::clamp(
+      alpha_write,
+      -params_.steering_angle_turning_limit_high_speed ,
+       params_.steering_angle_turning_limit_high_speed );
   }
 
   // Clip
@@ -286,6 +283,25 @@ controller_interface::return_type TricycleController::update(
     limiter_steering_.limit(
       alpha_write, last_command.steering_angle, second_to_last_command.steering_angle,
       period.seconds());
+  }
+
+  if (params_.open_loop)
+  {
+    // Convert the clipped wheel commands back to linear/angular velocities for odometry
+    double clipped_linear_vel = Ws_write * params_.wheel_radius * std::cos(alpha_write);
+    double clipped_angular_vel = (std::abs(alpha_write) > 1e-6) ?
+      clipped_linear_vel * std::tan(alpha_write) / params_.wheelbase : 0.0;
+
+    odometry_.updateOpenLoop(clipped_linear_vel, clipped_angular_vel, period);
+  }
+  else
+  {
+    if (std::isnan(Ws_read) || std::isnan(alpha_read))
+    {
+      RCLCPP_ERROR(get_node()->get_logger(), "Could not read feedback value");
+      return controller_interface::return_type::ERROR;
+    }
+    odometry_.update(Ws_read, alpha_read, period);
   }
 
   previous_commands_.pop();
