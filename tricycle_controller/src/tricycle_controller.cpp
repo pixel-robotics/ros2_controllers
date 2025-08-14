@@ -209,7 +209,7 @@ controller_interface::return_type TricycleController::update(
   }
 
   // When steering angle slightly exceeds max turning rate during tur at high speed, it should be capped to steering_angle_turning_limit_high_speed
-  if (Ws_write >= params_.high_speed_threshold &&
+  if (Ws_write >= params_.high_speed_turning_threshold &&
       std::abs(alpha_write) > params_.steering_angle_turning_limit_high_speed  &&
       std::abs(alpha_write) < params_.steering_angle_turning_limit_high_speed + params_.high_speed_turning_steering_limit_threshold)
   {

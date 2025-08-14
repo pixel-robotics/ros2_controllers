@@ -271,6 +271,11 @@ tricycle_controller:
     default_value: 0.0645772,
     description: "Hard steering‐angle limit (rad) used at high speed.",
   }
+  high_speed_turning_threshold: {
+    type: double,
+    default_value: 5.0,
+    description: "Speed threshold (rad/s) above which high-speed steering limits apply."
+  }
   high_speed_turning_steering_limit_threshold: {
     type: double,
     default_value: 0.174533,
