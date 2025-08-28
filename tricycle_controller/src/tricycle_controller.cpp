@@ -257,11 +257,12 @@ controller_interface::return_type TricycleController::update(
   limiter_traction_.limit(
     Ws_write, last_command.speed, second_to_last_command.speed, period.seconds());
 
-  // Use measured linear speed from odometry instead of traction wheel speed
+  // Use measured linear speed and angular speed from odometry to consider steering wheel movement
   double current_linear_speed = std::abs(odometry_.getLinear());
+  double current_angular_speed = std::abs(odometry_.getAngular());
 
-  // Update stationary timer
-  if (current_linear_speed < low_speed_threshold_) {
+  // Update stationary timer - consider both linear and steering motion
+  if (current_linear_speed < low_speed_threshold_ && current_angular_speed < low_speed_threshold_) {
     stationary_timer_ += period.seconds();
   } else {
     stationary_timer_ = 0.0;
