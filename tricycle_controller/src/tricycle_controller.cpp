@@ -567,16 +567,20 @@ void TricycleController::set_exact_mode(
   const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
   std::shared_ptr<std_srvs::srv::SetBool::Response> /*res*/)
 {
-  if (req->data)
+  // The caller (behavior tree) re-asserts the desired mode on every leg, so this
+  // service is called far more often than the mode actually changes. Log the
+  // transition, not the call, otherwise a single unchanged setting produces hundreds
+  // of identical INFO records per run.
+  if (req->data == use_exact_mode_)
   {
-    use_exact_mode_ = true;
-    RCLCPP_INFO(get_node()->get_logger(), "Exact mode enabled");
+    RCLCPP_DEBUG(
+      get_node()->get_logger(), "Exact mode already %s, nothing to do",
+      use_exact_mode_ ? "enabled" : "disabled");
+    return;
   }
-  else
-  {
-    use_exact_mode_ = false;
-    RCLCPP_INFO(get_node()->get_logger(), "Exact mode disabled");
-  }
+
+  use_exact_mode_ = req->data;
+  RCLCPP_INFO(get_node()->get_logger(), "Exact mode %s", use_exact_mode_ ? "enabled" : "disabled");
 }
 
 bool TricycleController::reset()
