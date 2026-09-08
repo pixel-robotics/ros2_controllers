@@ -38,6 +38,8 @@ constexpr auto DEFAULT_ODOMETRY_TOPIC = "~/odom";
 constexpr auto DEFAULT_TRANSFORM_TOPIC = "/tf";
 constexpr auto DEFAULT_RESET_ODOM_SERVICE = "~/reset_odometry";
 constexpr auto DEFAULT_SET_EXACT_MODE_SERVICE = "~/set_exact_mode";
+constexpr auto DEFAULT_CHURN_ACTIVE_TOPIC = "~/steering_churn_active";
+constexpr auto DEFAULT_CHURN_EVENT_TOPIC = "~/steering_churn";
 }  // namespace
 
 namespace tricycle_controller
@@ -197,6 +199,10 @@ controller_interface::return_type TricycleController::update(
   // Compute wheel velocity and angle
   auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
 
+  // A twist that is (almost) zero carries no motion: keep the wheel where it is
+  // instead of turning it to the +-90 deg the spin rule would produce.
+  apply_steering_hold(linear_command, angular_command, alpha_write, Ws_write);
+
   // When steering angle slightly exceeds max turning rate at high speed, it should be capped to steering_angle_limit_high_speed
   if (Ws_write >= params_.high_speed_threshold &&
       std::abs(alpha_write) > params_.steering_angle_limit_high_speed  &&
@@ -223,6 +229,37 @@ controller_interface::return_type TricycleController::update(
   if (params_.use_clipping && (std::abs(Ws_write) > 1e-6 || std::abs(alpha_write) > 1e-6))
   {
     clip_wheel_speed_and_steering_angle(Ws_write, alpha_write);
+  }
+
+  // Use measured linear speed and angular speed from odometry (previous cycle)
+  // to decide whether the robot stands still.
+  const double current_linear_speed = std::abs(odometry_.getLinear());
+  const double current_angular_speed = std::abs(odometry_.getAngular());
+  const bool stationary =
+    current_linear_speed < low_speed_threshold_ && current_angular_speed < low_speed_threshold_;
+
+  // Stationary steering churn: detect demands that only churn the steering
+  // wheel while the robot does not move, and filter them aggressively.
+  bool churn_filter_active = false;
+  if (params_.steering_churn.enabled)
+  {
+    update_churn_monitor(alpha_write, stationary, time.seconds());
+    churn_filter_active = churn_active_ && stationary;
+    if (churn_filter_active)
+    {
+      bool settled = false;
+      alpha_write = churn_filter(
+        alpha_write, time.seconds(), previous_commands_.back().steering_angle, settled);
+      if (!settled)
+      {
+        // do not drive on a steering demand that is still being debounced
+        Ws_write = 0.0;
+      }
+    }
+    else
+    {
+      churn_filter_was_active_ = false;
+    }
   }
 
   double alpha_delta = abs(alpha_write - alpha_read);
@@ -257,20 +294,19 @@ controller_interface::return_type TricycleController::update(
   limiter_traction_.limit(
     Ws_write, last_command.speed, second_to_last_command.speed, period.seconds());
 
-  // Use measured linear speed and angular speed from odometry to consider steering wheel movement
-  double current_linear_speed = std::abs(odometry_.getLinear());
-  double current_angular_speed = std::abs(odometry_.getAngular());
-
   // Update stationary timer - consider both linear and steering motion
-  if (current_linear_speed < low_speed_threshold_ && current_angular_speed < low_speed_threshold_) {
+  if (stationary) {
     stationary_timer_ += period.seconds();
   } else {
     stationary_timer_ = 0.0;
   }
 
   // Choose appropriate steering limiter based on conditions
-  if (stationary_timer_ >= stationary_time_threshold_) {
-    // Use stationary limiter when at low speed for extended time
+  const bool stationary_limits_by_time =
+    stationary_time_threshold_ > 0.0 && stationary_timer_ >= stationary_time_threshold_;
+  if (churn_filter_active || stationary_limits_by_time) {
+    // Use stationary limiter while the churn filter is active or (if enabled)
+    // when at low speed for extended time
     limiter_steering_stationary_.limit(
       alpha_write, last_command.steering_angle, second_to_last_command.steering_angle,
       period.seconds());
@@ -425,6 +461,18 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
       std::make_shared<realtime_tools::RealtimePublisher<AckermannDrive>>(
         ackermann_command_publisher_);
   }
+
+  // initialize steering churn state publishers
+  churn_active_publisher_ = get_node()->create_publisher<std_msgs::msg::Bool>(
+    DEFAULT_CHURN_ACTIVE_TOPIC, rclcpp::SystemDefaultsQoS());
+  realtime_churn_active_publisher_ =
+    std::make_shared<realtime_tools::RealtimePublisher<std_msgs::msg::Bool>>(
+      churn_active_publisher_);
+  churn_event_publisher_ = get_node()->create_publisher<std_msgs::msg::String>(
+    DEFAULT_CHURN_EVENT_TOPIC, rclcpp::SystemDefaultsQoS());
+  realtime_churn_event_publisher_ =
+    std::make_shared<realtime_tools::RealtimePublisher<std_msgs::msg::String>>(
+      churn_event_publisher_);
 
   // initialize command subscriber
   velocity_command_subscriber_ = get_node()->create_subscription<TwistStamped>(
@@ -600,6 +648,15 @@ bool TricycleController::reset()
   // Reset stationary timer
   stationary_timer_ = 0.0;
 
+  // Reset churn monitor
+  churn_events_.clear();
+  last_demand_valid_ = false;
+  last_demand_direction_ = 0;
+  churn_active_ = false;
+  churn_filter_was_active_ = false;
+  churn_reversals_in_window_ = 0;
+  churn_travel_in_window_ = 0.0;
+
   received_velocity_msg_ptr_.set(nullptr);
   return true;
 }
@@ -702,6 +759,134 @@ double TricycleController::convert_trans_rot_vel_to_steering_angle(
     return 0;
   }
   return std::atan(theta_dot * wheelbase / Vx);
+}
+
+bool TricycleController::apply_steering_hold(
+  double linear_command, double angular_command, double & alpha, double & Ws)
+{
+  const bool exactly_zero = linear_command == 0.0 && angular_command == 0.0;
+  const bool below_thresholds =
+    std::abs(linear_command) < params_.steering_hold.linear_threshold &&
+    std::abs(angular_command) < params_.steering_hold.angular_threshold;
+  if (exactly_zero || !below_thresholds || previous_commands_.empty())
+  {
+    return false;
+  }
+  alpha = previous_commands_.back().steering_angle;
+  Ws = 0.0;
+  return true;
+}
+
+void TricycleController::update_churn_monitor(double alpha_demand, bool stationary, double now)
+{
+  const auto & cfg = params_.steering_churn;
+
+  if (!stationary)
+  {
+    // evidence is only collected while the robot stands still
+    churn_events_.clear();
+    last_demand_valid_ = false;
+    last_demand_direction_ = 0;
+  }
+  else
+  {
+    if (!last_demand_valid_)
+    {
+      last_demand_ = alpha_demand;
+      last_demand_valid_ = true;
+    }
+    const double step = alpha_demand - last_demand_;
+    if (std::abs(step) >= cfg.min_step)
+    {
+      const int direction = step > 0.0 ? 1 : -1;
+      const bool reversal = last_demand_direction_ != 0 && direction != last_demand_direction_;
+      churn_events_.push_back(ChurnEvent{now, std::abs(step), reversal});
+      last_demand_direction_ = direction;
+      last_demand_ = alpha_demand;
+    }
+  }
+
+  while (!churn_events_.empty() && now - churn_events_.front().time > cfg.window)
+  {
+    churn_events_.pop_front();
+  }
+  int reversals = 0;
+  double travel = 0.0;
+  for (const auto & e : churn_events_)
+  {
+    reversals += e.reversal ? 1 : 0;
+    travel += e.travel;
+  }
+  churn_reversals_in_window_ = reversals;
+  churn_travel_in_window_ = travel;
+
+  const bool evidence = reversals >= cfg.reversal_threshold || travel >= cfg.travel_threshold;
+  if (evidence)
+  {
+    churn_last_evidence_time_ = now;
+    if (!churn_active_)
+    {
+      churn_active_ = true;
+      churn_episode_start_time_ = now;
+      RCLCPP_WARN(
+        get_node()->get_logger(),
+        "Steering churn while stationary: %d demand reversals and %.2f rad of steering demand "
+        "travel within %.1f s. Debouncing the steering demand and applying the stationary "
+        "steering limits.",
+        reversals, travel, cfg.window);
+      publish_churn_state(
+        true, "start reversals=" + std::to_string(reversals) +
+                " travel_rad=" + std::to_string(travel) +
+                " window_s=" + std::to_string(cfg.window));
+    }
+  }
+  else if (churn_active_ && now - churn_last_evidence_time_ > cfg.hold_time)
+  {
+    churn_active_ = false;
+    const double duration = now - churn_episode_start_time_;
+    RCLCPP_INFO(
+      get_node()->get_logger(), "Steering churn episode ended after %.1f s", duration);
+    publish_churn_state(false, "end duration_s=" + std::to_string(duration));
+  }
+}
+
+double TricycleController::churn_filter(
+  double alpha_demand, double now, double last_steering_cmd, bool & settled)
+{
+  const auto & cfg = params_.steering_churn;
+  if (!churn_filter_was_active_)
+  {
+    // freeze the steering where the last command left it
+    debounced_target_ = last_steering_cmd;
+    pending_target_ = alpha_demand;
+    pending_since_ = now;
+    churn_filter_was_active_ = true;
+  }
+  if (std::abs(alpha_demand - pending_target_) > cfg.debounce_tolerance)
+  {
+    pending_target_ = alpha_demand;
+    pending_since_ = now;
+  }
+  else if (now - pending_since_ >= cfg.debounce_time)
+  {
+    debounced_target_ = pending_target_;
+  }
+  settled = std::abs(alpha_demand - debounced_target_) <= cfg.debounce_tolerance;
+  return debounced_target_;
+}
+
+void TricycleController::publish_churn_state(bool active, const std::string & text)
+{
+  if (realtime_churn_active_publisher_ && realtime_churn_active_publisher_->trylock())
+  {
+    realtime_churn_active_publisher_->msg_.data = active;
+    realtime_churn_active_publisher_->unlockAndPublish();
+  }
+  if (realtime_churn_event_publisher_ && realtime_churn_event_publisher_->trylock())
+  {
+    realtime_churn_event_publisher_->msg_.data = text;
+    realtime_churn_event_publisher_->unlockAndPublish();
+  }
 }
 
 std::tuple<double, double> TricycleController::twist_to_ackermann(double Vx, double theta_dot)

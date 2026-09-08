@@ -236,9 +236,97 @@ tricycle_controller:
   }
   stationary_time_threshold: {
     type: double,
-    default_value: 20.0, # seconds
-    description: "Time threshold after which to use stationary steering limits when speed is below low_speed_threshold",
+    default_value: 0.0, # seconds, disabled
+    description: "Time at low speed after which the steering_stationary limits apply pre-emptively. 0 (or negative) disables this time-based fallback; the steering_stationary limits are then only used by the steering churn filter.",
   }
+  steering_hold:
+    # A twist that is not exactly zero but below both thresholds carries no
+    # motion. Without the hold, twist_to_ackermann maps (v=0, w=1e-4) to a full
+    # +-90 deg steering demand (spin rule) and the wheel is turned for nothing.
+    linear_threshold: {
+      type: double,
+      default_value: 0.005, # m/s
+      description: "Together with angular_threshold: a non-zero twist below both thresholds keeps the last steering command and commands zero wheel speed instead of being converted to a steering angle.",
+      validation: {
+        gt_eq<>: [0.0]
+      }
+    }
+    angular_threshold: {
+      type: double,
+      default_value: 0.01, # rad/s
+      description: "See linear_threshold.",
+      validation: {
+        gt_eq<>: [0.0]
+      }
+    }
+  steering_churn:
+    # Monitor for steering demands that make the wheel churn while the robot
+    # stands still (rapid direction reversals, or large repeated swings). While
+    # an episode is active and the robot is stationary the demand is debounced,
+    # wheel speed is cut until the demand settles, and the steering_stationary
+    # limits apply. State is published on ~/steering_churn_active (Bool) and
+    # ~/steering_churn (String, one message at episode start and end).
+    enabled: {
+      type: bool,
+      default_value: true,
+      description: "Enable the stationary steering churn monitor and filter.",
+    }
+    window: {
+      type: double,
+      default_value: 2.0, # seconds
+      description: "Sliding window over which demand reversals and travel are counted.",
+      validation: {
+        gt<>: [0.0]
+      }
+    }
+    min_step: {
+      type: double,
+      default_value: 0.1, # rad
+      description: "Steering demand changes smaller than this are ignored by the monitor (controller noise).",
+      validation: {
+        gt<>: [0.0]
+      }
+    }
+    reversal_threshold: {
+      type: int,
+      default_value: 4,
+      description: "Number of demand direction reversals within window that starts a churn episode.",
+      validation: {
+        gt<>: [0]
+      }
+    }
+    travel_threshold: {
+      type: double,
+      default_value: 5.0, # rad, more than align + re-centre + align the other way (3/2 pi)
+      description: "Accumulated absolute steering demand change within window that starts a churn episode.",
+      validation: {
+        gt<>: [0.0]
+      }
+    }
+    hold_time: {
+      type: double,
+      default_value: 5.0, # seconds
+      description: "A churn episode ends this long after the last evidence.",
+      validation: {
+        gt<>: [0.0]
+      }
+    }
+    debounce_time: {
+      type: double,
+      default_value: 0.5, # seconds
+      description: "While the churn filter is active a new steering demand must persist this long before it is forwarded.",
+      validation: {
+        gt_eq<>: [0.0]
+      }
+    }
+    debounce_tolerance: {
+      type: double,
+      default_value: 0.1, # rad
+      description: "Demands within this tolerance of each other count as the same demand for the debounce.",
+      validation: {
+        gt<>: [0.0]
+      }
+    }
   use_clipping: {
     type: bool,
     default_value: false,

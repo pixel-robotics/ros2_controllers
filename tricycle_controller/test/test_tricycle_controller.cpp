@@ -51,6 +51,20 @@ class TestableTricycleController : public tricycle_controller::TricycleControlle
 {
 public:
   using TricycleController::TricycleController;
+  /// Inject a command directly (no executor spin needed), stamped with the given time.
+  void set_command(double linear, double angular, const rclcpp::Time & stamp)
+  {
+    auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+    msg->header.stamp = stamp;
+    msg->twist.linear.x = linear;
+    msg->twist.angular.z = angular;
+    received_velocity_msg_ptr_.set(
+      [msg](std::shared_ptr<geometry_msgs::msg::TwistStamped> & stored_value)
+      { stored_value = msg; });
+  }
+
+  bool churn_active() const { return churn_active_; }
+
   std::shared_ptr<geometry_msgs::msg::TwistStamped> getLastReceivedTwist()
   {
     std::shared_ptr<geometry_msgs::msg::TwistStamped> ret;
@@ -352,4 +366,152 @@ TEST_F(TestTricycleController, correct_initialization_using_parameters)
   state = controller_->get_node()->configure();
   ASSERT_EQ(State::PRIMARY_STATE_INACTIVE, state.id());
   executor.cancel();
+}
+
+namespace
+{
+rclcpp::Time ros_time(double seconds)
+{
+  return rclcpp::Time(static_cast<int64_t>(seconds * 1e9), RCL_ROS_TIME);
+}
+constexpr double DT = 0.02;  // 50 Hz controller update
+}  // namespace
+
+class TestTricycleControllerSteering : public TestTricycleController
+{
+protected:
+  // Real-robot-like steering limits: fast normal steering, crawling
+  // "stationary" limits that the churn filter falls back to.
+  void init_and_activate(const std::vector<rclcpp::Parameter> & extra = {})
+  {
+    std::vector<rclcpp::Parameter> params = {
+      rclcpp::Parameter("steering.max_position", 1.62),
+      rclcpp::Parameter("steering.max_velocity", 1.0),
+      rclcpp::Parameter("steering_low_speed.max_position", 1.62),
+      rclcpp::Parameter("steering_low_speed.max_velocity", 1.0),
+      rclcpp::Parameter("steering_stationary.max_position", 1.62),
+      rclcpp::Parameter("steering_stationary.max_velocity", 0.2),
+      rclcpp::Parameter("traction.max_acceleration", 5.0),
+      rclcpp::Parameter("traction.max_deceleration", 8.0),
+      rclcpp::Parameter("low_speed_threshold", 0.02),
+      rclcpp::Parameter("stationary_time_threshold", 0.0),  // time-based fallback off
+    };
+    params.insert(params.end(), extra.begin(), extra.end());
+    ASSERT_EQ(InitController(traction_joint_name, steering_joint_name, params),
+              controller_interface::return_type::OK);
+    ASSERT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::SUCCESS);
+    position_ = 0.0;
+    velocity_ = 0.0;
+    assignResources();
+    ASSERT_EQ(controller_->on_activate(rclcpp_lifecycle::State()), CallbackReturn::SUCCESS);
+  }
+
+  /// One controller cycle at time t with the given twist.
+  void step(double linear, double angular, double t)
+  {
+    controller_->set_command(linear, angular, ros_time(t));
+    ASSERT_EQ(
+      controller_->update(ros_time(t), rclcpp::Duration::from_seconds(DT)),
+      controller_interface::return_type::OK);
+  }
+
+  double steering_cmd() const { return steering_joint_pos_cmd_.get_value(); }
+  double traction_cmd() const { return traction_joint_vel_cmd_.get_value(); }
+};
+
+TEST_F(TestTricycleControllerSteering, near_zero_twist_holds_the_steering_instead_of_spinning_it)
+{
+  init_and_activate();
+  double t = 0.0;
+
+  // a real spin command steers towards +90 deg
+  for (int i = 0; i < 10; ++i, t += DT) step(0.0, 0.5, t);
+  const double after_spin = steering_cmd();
+  EXPECT_GT(after_spin, 0.15);
+
+  // (v=0, w=1e-4) used to be a "spin" and produced a -90 deg demand; now the
+  // steering is held and the wheel does not drive
+  for (int i = 0; i < 25; ++i, t += DT) step(0.0, -1e-4, t);
+  EXPECT_NEAR(steering_cmd(), after_spin, 1e-6);  // float32 in AckermannDrive
+  EXPECT_EQ(traction_cmd(), 0.0);
+
+  // (v=1e-3, w=-1e-3) is also below the thresholds
+  for (int i = 0; i < 25; ++i, t += DT) step(1e-3, -1e-3, t);
+  EXPECT_NEAR(steering_cmd(), after_spin, 1e-6);  // float32 in AckermannDrive
+  EXPECT_EQ(traction_cmd(), 0.0);
+
+  // an exact zero twist still re-centres the wheel (unchanged behaviour)
+  for (int i = 0; i < 25; ++i, t += DT) step(0.0, 0.0, t);
+  EXPECT_LT(steering_cmd(), after_spin - 0.1);
+
+  EXPECT_FALSE(controller_->churn_active());
+}
+
+TEST_F(TestTricycleControllerSteering, rapid_demand_reversals_while_stationary_are_debounced)
+{
+  init_and_activate();
+  double t = 0.0;
+
+  // +-0.5 rad/s spin demands alternating at 10 Hz: +-90 deg steering demand
+  // flips every 0.1 s, faster than the wheel can follow.
+  double max_abs_steering_before = 0.0;
+  bool detected = false;
+  double detected_at = -1.0;
+  double frozen_at = 0.0;
+  double max_abs_deviation_after = 0.0;
+  double max_abs_traction_after = 0.0;
+  for (int i = 0; i < 150; ++i, t += DT)
+  {
+    const double w = ((i / 5) % 2 == 0) ? 0.5 : -0.5;
+    step(0.0, w, t);
+    if (!detected)
+    {
+      max_abs_steering_before = std::max(max_abs_steering_before, std::abs(steering_cmd()));
+      if (controller_->churn_active())
+      {
+        detected = true;
+        detected_at = t;
+        frozen_at = steering_cmd();
+      }
+    }
+    else
+    {
+      max_abs_deviation_after =
+        std::max(max_abs_deviation_after, std::abs(steering_cmd() - frozen_at));
+      max_abs_traction_after = std::max(max_abs_traction_after, std::abs(traction_cmd()));
+    }
+  }
+  ASSERT_TRUE(detected) << "churn episode was not detected";
+  // 4 reversals at 10 Hz -> well within the first second
+  EXPECT_LT(detected_at, 1.0);
+  // the wheel was actually being churned before detection
+  EXPECT_GT(max_abs_steering_before, 0.05);
+  // after detection the steering target is frozen and the wheel does not drive
+  EXPECT_LT(max_abs_deviation_after, 0.05);
+  EXPECT_EQ(max_abs_traction_after, 0.0);
+
+  // upstream stops: exact zero -> re-centre demand, debounced and applied at the
+  // stationary limits; the episode ends hold_time after the evidence expired
+  for (int i = 0; i < 500; ++i, t += DT) step(0.0, 0.0, t);
+  EXPECT_FALSE(controller_->churn_active());
+  EXPECT_NEAR(steering_cmd(), 0.0, 1e-6);
+
+  // a steady spin request afterwards is NOT slowed down (normal limits, 1 rad/s)
+  const double t0 = t;
+  for (; t < t0 + 0.5; t += DT) step(0.0, 0.5, t);
+  EXPECT_GT(steering_cmd(), 0.4);
+}
+
+TEST_F(TestTricycleControllerSteering, churn_monitor_ignores_demands_while_driving)
+{
+  init_and_activate();
+  double t = 0.0;
+  // driving forward at 1 m/s with the steering demand flipping +-0.3 rad at
+  // 10 Hz: unpleasant, but the robot moves, so this is not stationary churn
+  for (int i = 0; i < 150; ++i, t += DT)
+  {
+    const double w = ((i / 5) % 2 == 0) ? 0.3 : -0.3;
+    step(1.0, w, t);
+  }
+  EXPECT_FALSE(controller_->churn_active());
 }

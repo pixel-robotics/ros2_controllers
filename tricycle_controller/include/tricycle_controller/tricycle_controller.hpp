@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <memory>
 #include <queue>
 #include <string>
@@ -35,6 +36,8 @@
 #include "rclcpp_lifecycle/state.hpp"
 #include "realtime_tools/realtime_box.hpp"
 #include "realtime_tools/realtime_publisher.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
@@ -96,6 +99,30 @@ protected:
   double convert_trans_rot_vel_to_steering_angle(double v, double omega, double wheelbase);
   std::tuple<double, double> twist_to_ackermann(double linear_command, double angular_command);
 
+  /**
+   * \brief Steering hold rule: a twist that is not exactly zero but below the
+   * steering_hold thresholds carries no motion, so keep the last steering
+   * command and command zero wheel speed instead of converting it.
+   * \return true if the hold was applied
+   */
+  bool apply_steering_hold(
+    double linear_command, double angular_command, double & alpha, double & Ws);
+
+  /**
+   * \brief Collect churn evidence from the steering demand while stationary and
+   * maintain the churn episode state (start / end, notifications).
+   */
+  void update_churn_monitor(double alpha_demand, bool stationary, double now);
+
+  /**
+   * \brief Debounce the steering demand while the churn filter is active.
+   * \param [out] settled true if the raw demand agrees with the forwarded target
+   * \return the steering target to forward
+   */
+  double churn_filter(double alpha_demand, double now, double last_steering_cmd, bool & settled);
+
+  void publish_churn_state(bool active, const std::string & text);
+
   // Parameters from ROS for tricycle_controller
   std::shared_ptr<ParamListener> param_listener_;
   Params params_;
@@ -146,6 +173,34 @@ protected:
 
   bool use_exact_mode_ = false;
   double exact_mode_threshold_ = M_PI / 6;
+
+  // Stationary steering churn monitor (see update_churn_monitor / churn_filter)
+  struct ChurnEvent
+  {
+    double time;     // seconds
+    double travel;   // absolute demand change of this step [rad]
+    bool reversal;   // the step reversed the direction of the previous step
+  };
+  std::deque<ChurnEvent> churn_events_;
+  bool last_demand_valid_ = false;
+  double last_demand_ = 0.0;
+  int last_demand_direction_ = 0;
+  bool churn_active_ = false;
+  double churn_episode_start_time_ = 0.0;
+  double churn_last_evidence_time_ = 0.0;
+  int churn_reversals_in_window_ = 0;
+  double churn_travel_in_window_ = 0.0;
+  bool churn_filter_was_active_ = false;
+  double debounced_target_ = 0.0;
+  double pending_target_ = 0.0;
+  double pending_since_ = 0.0;
+
+  std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> churn_active_publisher_ = nullptr;
+  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Bool>>
+    realtime_churn_active_publisher_ = nullptr;
+  std::shared_ptr<rclcpp::Publisher<std_msgs::msg::String>> churn_event_publisher_ = nullptr;
+  std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::String>>
+    realtime_churn_event_publisher_ = nullptr;
 
   void reset_odometry(
     const std::shared_ptr<rmw_request_id_t> request_header,
