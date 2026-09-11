@@ -111,8 +111,11 @@ protected:
   /**
    * \brief Collect churn evidence from the steering demand while stationary and
    * maintain the churn episode state (start / end, notifications).
+   * \param evidence_demand false for demands that carry no churn evidence
+   *        (spin-rule +-90 deg for v == 0, steering hold); they are skipped
    */
-  void update_churn_monitor(double alpha_demand, bool stationary, double now);
+  void update_churn_monitor(
+    double alpha_demand, bool stationary, bool evidence_demand, double now);
 
   /**
    * \brief Debounce the steering demand while the churn filter is active.

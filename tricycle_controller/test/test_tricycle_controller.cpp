@@ -18,6 +18,7 @@
 
 #include <gmock/gmock.h>
 
+#include <cmath>
 #include <memory>
 #include <string>
 #include <thread>
@@ -380,6 +381,28 @@ constexpr double DT = 0.02;  // 50 Hz controller update
 class TestTricycleControllerSteering : public TestTricycleController
 {
 protected:
+  // The base fixture feeds every command straight back as joint state. For the
+  // churn tests the feedback must stay what a real robot reports while its
+  // wheel is being churned: standing still. Decoupled state variables; a test
+  // that wants the robot to "move" sets traction_state_ itself.
+  double steering_state_ = 0.0;
+  double traction_state_ = 0.0;
+  hardware_interface::StateInterface decoupled_steering_state_{
+    steering_joint_name, HW_IF_POSITION, &steering_state_};
+  hardware_interface::StateInterface decoupled_traction_state_{
+    traction_joint_name, HW_IF_VELOCITY, &traction_state_};
+
+  void assignDecoupledResources()
+  {
+    std::vector<LoanedStateInterface> state_ifs;
+    state_ifs.emplace_back(decoupled_steering_state_);
+    state_ifs.emplace_back(decoupled_traction_state_);
+    std::vector<LoanedCommandInterface> command_ifs;
+    command_ifs.emplace_back(steering_joint_pos_cmd_);
+    command_ifs.emplace_back(traction_joint_vel_cmd_);
+    controller_->assign_interfaces(std::move(command_ifs), std::move(state_ifs));
+  }
+
   // Real-robot-like steering limits: fast normal steering, crawling
   // "stationary" limits that the churn filter falls back to.
   void init_and_activate(const std::vector<rclcpp::Parameter> & extra = {})
@@ -402,7 +425,7 @@ protected:
     ASSERT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::SUCCESS);
     position_ = 0.0;
     velocity_ = 0.0;
-    assignResources();
+    assignDecoupledResources();
     ASSERT_EQ(controller_->on_activate(rclcpp_lifecycle::State()), CallbackReturn::SUCCESS);
   }
 
@@ -447,13 +470,21 @@ TEST_F(TestTricycleControllerSteering, near_zero_twist_holds_the_steering_instea
   EXPECT_FALSE(controller_->churn_active());
 }
 
+namespace
+{
+// Tight creep arcs (wheelbase 1.0 m in the fixture): +-71.6 deg steering demand
+constexpr double CREEP_V = 0.05;
+constexpr double CREEP_W = 0.15;
+const double CREEP_ALPHA = std::atan(CREEP_W * 1.0 / CREEP_V);
+}  // namespace
+
 TEST_F(TestTricycleControllerSteering, rapid_demand_reversals_while_stationary_are_debounced)
 {
   init_and_activate();
   double t = 0.0;
 
-  // +-0.5 rad/s spin demands alternating at 10 Hz: +-90 deg steering demand
-  // flips every 0.1 s, faster than the wheel can follow.
+  // creep arcs with the turning direction alternating at 10 Hz: the +-72 deg
+  // steering demand flips every 0.1 s, faster than the wheel can follow.
   double max_abs_steering_before = 0.0;
   bool detected = false;
   double detected_at = -1.0;
@@ -462,8 +493,8 @@ TEST_F(TestTricycleControllerSteering, rapid_demand_reversals_while_stationary_a
   double max_abs_traction_after = 0.0;
   for (int i = 0; i < 150; ++i, t += DT)
   {
-    const double w = ((i / 5) % 2 == 0) ? 0.5 : -0.5;
-    step(0.0, w, t);
+    const double w = ((i / 5) % 2 == 0) ? CREEP_W : -CREEP_W;
+    step(CREEP_V, w, t);
     if (!detected)
     {
       max_abs_steering_before = std::max(max_abs_steering_before, std::abs(steering_cmd()));
@@ -478,7 +509,12 @@ TEST_F(TestTricycleControllerSteering, rapid_demand_reversals_while_stationary_a
     {
       max_abs_deviation_after =
         std::max(max_abs_deviation_after, std::abs(steering_cmd() - frozen_at));
-      max_abs_traction_after = std::max(max_abs_traction_after, std::abs(traction_cmd()));
+      // the traction limiter (8 rad/s^2 here) needs a few cycles to bring the
+      // wheel speed that was commanded before detection down to zero
+      if (t > detected_at + 0.1)
+      {
+        max_abs_traction_after = std::max(max_abs_traction_after, std::abs(traction_cmd()));
+      }
     }
   }
   ASSERT_TRUE(detected) << "churn episode was not detected";
@@ -490,8 +526,8 @@ TEST_F(TestTricycleControllerSteering, rapid_demand_reversals_while_stationary_a
   EXPECT_LT(max_abs_deviation_after, 0.05);
   EXPECT_EQ(max_abs_traction_after, 0.0);
 
-  // upstream stops: exact zero -> re-centre demand, debounced and applied at the
-  // stationary limits; the episode ends hold_time after the evidence expired
+  // upstream stops: exact zero -> re-centre demand, debounced and applied;
+  // the episode ends hold_time after the evidence expired
   for (int i = 0; i < 500; ++i, t += DT) step(0.0, 0.0, t);
   EXPECT_FALSE(controller_->churn_active());
   EXPECT_NEAR(steering_cmd(), 0.0, 1e-6);
@@ -502,10 +538,66 @@ TEST_F(TestTricycleControllerSteering, rapid_demand_reversals_while_stationary_a
   EXPECT_GT(steering_cmd(), 0.4);
 }
 
+TEST_F(TestTricycleControllerSteering, settled_demand_during_churn_episode_is_followed_at_low_speed_limits)
+{
+  init_and_activate();
+  double t = 0.0;
+
+  // provoke an episode (same pattern as above)
+  for (int i = 0; i < 75; ++i, t += DT)
+  {
+    const double w = ((i / 5) % 2 == 0) ? CREEP_W : -CREEP_W;
+    step(CREEP_V, w, t);
+  }
+  ASSERT_TRUE(controller_->churn_active());
+  const double frozen_at = steering_cmd();
+  EXPECT_LT(std::abs(frozen_at), 0.5);
+
+  // upstream settles on one creep arc: after the 0.5 s debounce the wheel must
+  // be moved to the demand with the low-speed limits (1 rad/s here), not the
+  // stationary 0.2 rad/s, and the wheel must drive once it is there. Before
+  // this the settled target was approached at the stationary limits and the
+  // robot stood still for the whole episode.
+  const double t0 = t;
+  for (; t < t0 + 2.0; t += DT) step(CREEP_V, -CREEP_W, t);
+  EXPECT_TRUE(controller_->churn_active());  // hold_time 5 s has not passed
+  EXPECT_NEAR(steering_cmd(), -CREEP_ALPHA, 0.05);
+  EXPECT_GT(std::abs(traction_cmd()), 0.1);
+}
+
+TEST_F(TestTricycleControllerSteering, spin_rule_flip_while_stopping_is_not_churn_evidence)
+{
+  init_and_activate();
+  double t = 0.0;
+
+  // Replay of a TEB stop (ros_domain_2_20260911_012047_0, t=22.9..23.5 s):
+  // the last reverse arc, then teb_flickering_protection's turning-on-spot
+  // state emits (v=0, w=0.11) for 0.35 s -> spin rule -> +90 deg, then a short
+  // opposite arc and finally a steady forward creep arc. Counting the +-90 deg
+  // jump as demand travel started a churn episode on every stop.
+  for (int i = 0; i < 5; ++i, t += DT) step(-0.03, 0.11, t);   // -74.7 deg
+  for (int i = 0; i < 18; ++i, t += DT) step(0.0, 0.11, t);    // spin rule: +90 deg
+  for (int i = 0; i < 5; ++i, t += DT) step(-0.06, -0.09, t);  // +56.3 deg
+  EXPECT_FALSE(controller_->churn_active());
+
+  // steady creep arc: -64.4 deg; the wheel has to travel from +90 deg at the
+  // 1 rad/s low-speed limit, so allow 3.5 s
+  const double target = std::atan(-0.10 * 1.0 / 0.048);
+  const double t0 = t;
+  for (; t < t0 + 3.5; t += DT)
+  {
+    step(0.048, -0.10, t);
+    EXPECT_FALSE(controller_->churn_active()) << "at t=" << t;
+  }
+  EXPECT_NEAR(steering_cmd(), target, 0.05);
+  EXPECT_GT(traction_cmd(), 0.1);
+}
+
 TEST_F(TestTricycleControllerSteering, churn_monitor_ignores_demands_while_driving)
 {
   init_and_activate();
   double t = 0.0;
+  traction_state_ = 10.0;  // wheel feedback: 1 m/s with wheel_radius 0.1
   // driving forward at 1 m/s with the steering demand flipping +-0.3 rad at
   // 10 Hz: unpleasant, but the robot moves, so this is not stationary churn
   for (int i = 0; i < 150; ++i, t += DT)

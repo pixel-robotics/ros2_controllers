@@ -199,9 +199,19 @@ controller_interface::return_type TricycleController::update(
   // Compute wheel velocity and angle
   auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
 
+  // The spin rule in twist_to_ackermann maps (v == 0, w != 0) to +-90 deg no
+  // matter how small |w| is. Upstream produces such twists transiently when a
+  // drive is brought to a standstill (TEB's turning-on-spot state, the
+  // velocity smoother's linear deadband) and the resulting +-90 deg jump is
+  // not evidence of steering churn: counting it started a churn episode on
+  // every stop and froze the wheel for the steady demand that followed.
+  const bool spin_rule_demand = linear_command == 0.0 && angular_command != 0.0;
+
   // A twist that is (almost) zero carries no motion: keep the wheel where it is
   // instead of turning it to the +-90 deg the spin rule would produce.
-  apply_steering_hold(linear_command, angular_command, alpha_write, Ws_write);
+  const bool steering_held =
+    apply_steering_hold(linear_command, angular_command, alpha_write, Ws_write);
+  const bool churn_evidence = !spin_rule_demand && !steering_held;
 
   // When steering angle slightly exceeds max turning rate at high speed, it should be capped to steering_angle_limit_high_speed
   if (Ws_write >= params_.high_speed_threshold &&
@@ -241,15 +251,17 @@ controller_interface::return_type TricycleController::update(
   // Stationary steering churn: detect demands that only churn the steering
   // wheel while the robot does not move, and filter them aggressively.
   bool churn_filter_active = false;
+  bool churn_debouncing = false;
   if (params_.steering_churn.enabled)
   {
-    update_churn_monitor(alpha_write, stationary, time.seconds());
+    update_churn_monitor(alpha_write, stationary, churn_evidence, time.seconds());
     churn_filter_active = churn_active_ && stationary;
     if (churn_filter_active)
     {
       bool settled = false;
       alpha_write = churn_filter(
         alpha_write, time.seconds(), previous_commands_.back().steering_angle, settled);
+      churn_debouncing = !settled;
       if (!settled)
       {
         // do not drive on a steering demand that is still being debounced
@@ -304,9 +316,13 @@ controller_interface::return_type TricycleController::update(
   // Choose appropriate steering limiter based on conditions
   const bool stationary_limits_by_time =
     stationary_time_threshold_ > 0.0 && stationary_timer_ >= stationary_time_threshold_;
-  if (churn_filter_active || stationary_limits_by_time) {
-    // Use stationary limiter while the churn filter is active or (if enabled)
-    // when at low speed for extended time
+  if (churn_debouncing || stationary_limits_by_time) {
+    // Use the stationary limiter while the churn filter is still debouncing a
+    // demand or (if enabled) when at low speed for extended time. Once the
+    // debounced demand has settled the wheel is moved there with the regular
+    // low-speed limits: crawling to a settled target only kept the robot
+    // standing (wheel speed is scaled down while the steering error is large)
+    // and made every stop cost a full progress-checker timeout.
     limiter_steering_stationary_.limit(
       alpha_write, last_command.steering_angle, second_to_last_command.steering_angle,
       period.seconds());
@@ -777,7 +793,8 @@ bool TricycleController::apply_steering_hold(
   return true;
 }
 
-void TricycleController::update_churn_monitor(double alpha_demand, bool stationary, double now)
+void TricycleController::update_churn_monitor(
+  double alpha_demand, bool stationary, bool evidence_demand, double now)
 {
   const auto & cfg = params_.steering_churn;
 
@@ -788,8 +805,10 @@ void TricycleController::update_churn_monitor(double alpha_demand, bool stationa
     last_demand_valid_ = false;
     last_demand_direction_ = 0;
   }
-  else
+  else if (evidence_demand)
   {
+    // spin-rule (+-90 deg for v == 0) and held demands are skipped here: the
+    // next real demand is compared with the last real one
     if (!last_demand_valid_)
     {
       last_demand_ = alpha_demand;

@@ -262,10 +262,14 @@ tricycle_controller:
   steering_churn:
     # Monitor for steering demands that make the wheel churn while the robot
     # stands still (rapid direction reversals, or large repeated swings). While
-    # an episode is active and the robot is stationary the demand is debounced,
-    # wheel speed is cut until the demand settles, and the steering_stationary
-    # limits apply. State is published on ~/steering_churn_active (Bool) and
-    # ~/steering_churn (String, one message at episode start and end).
+    # an episode is active and the robot is stationary the demand is debounced
+    # (debounce_time / debounce_tolerance) and wheel speed is cut until the
+    # demand settles; the steering_stationary limits apply only while a demand
+    # is still being debounced, a settled demand is followed with the regular
+    # (low-speed) limits. Spin-rule demands (v == 0 -> +-90 deg) and held
+    # demands (steering_hold) are not counted as evidence. State is published
+    # on ~/steering_churn_active (Bool) and ~/steering_churn (String, one
+    # message at episode start and end).
     enabled: {
       type: bool,
       default_value: true,
