@@ -79,7 +79,7 @@ tricycle_controller:
   exact_mode_threshold: {
     type: double,
     default_value: 0.52, # M_PI / 6
-    description: "In exact mode, at which steering angle difference to allow driving at all. Reconfigurable at runtime (``ros2 param set``), valid range (0, pi]; the behavior tree tightens it for an on-the-spot spin and restores it afterwards.",
+    description: "In exact mode, at which steering angle difference to allow driving at all. Used when the set_exact_mode service request leaves its threshold at 0; a request threshold > 0 (e.g. a tight one for an on-the-spot spin) overrides it until the mode is set again.",
     validation: {
       gt<>: [0.0]
     }

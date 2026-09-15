@@ -28,6 +28,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   std_srvs
   tf2
   tf2_msgs
+  tricycle_controller_msgs
 )
 
 find_package(ament_cmake REQUIRED)

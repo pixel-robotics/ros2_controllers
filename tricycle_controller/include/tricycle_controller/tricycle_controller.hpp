@@ -34,15 +34,14 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
-#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 #include "realtime_tools/realtime_box.hpp"
 #include "realtime_tools/realtime_publisher.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/empty.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
+#include "tricycle_controller_msgs/srv/set_exact_mode.hpp"
 
 #include "tricycle_controller/odometry.hpp"
 #include "tricycle_controller/steering_limiter.hpp"
@@ -161,7 +160,7 @@ protected:
   std::shared_ptr<TwistStamped> last_command_msg_;
 
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_odom_service_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_exact_mode_service_;
+  rclcpp::Service<tricycle_controller_msgs::srv::SetExactMode>::SharedPtr set_exact_mode_service_;
 
   std::queue<AckermannDrive> previous_commands_;  // last two commands
 
@@ -177,14 +176,10 @@ protected:
   double stationary_timer_ = 0.0;  // seconds
 
   // Exact mode: traction is released only once the steering error is below
-  // exact_mode_threshold_. Both are written from the service / parameter
-  // threads and read in the real-time update loop, hence atomic.
+  // exact_mode_threshold_. Both are written by the set_exact_mode service and
+  // read in the real-time update loop, hence atomic.
   std::atomic<bool> use_exact_mode_{false};
   std::atomic<double> exact_mode_threshold_{M_PI / 6};
-  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
-    on_set_parameters_callback_handle_;
-  rclcpp::node_interfaces::PostSetParametersCallbackHandle::SharedPtr
-    post_set_parameters_callback_handle_;
 
   // Stationary steering churn monitor (see update_churn_monitor / churn_filter)
   struct ChurnEvent
@@ -218,17 +213,15 @@ protected:
     const std::shared_ptr<rmw_request_id_t> request_header,
     const std::shared_ptr<std_srvs::srv::Empty::Request> req,
     std::shared_ptr<std_srvs::srv::Empty::Response> res);
+  /**
+   * \brief Enable / disable exact mode. A request threshold > 0 replaces the
+   * exact_mode_threshold parameter for as long as the mode stays enabled, 0
+   * (unset) selects the parameter; anything outside (0, pi] is rejected.
+   */
   void set_exact_mode(
     const std::shared_ptr<rmw_request_id_t> request_header,
-    const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
-    std::shared_ptr<std_srvs::srv::SetBool::Response> res);
-  /**
-   * \brief Validate a runtime parameter change (exact_mode_threshold must be
-   * in (0, pi]); the change is applied by apply_parameters once accepted.
-   */
-  rcl_interfaces::msg::SetParametersResult validate_parameters(
-    const std::vector<rclcpp::Parameter> & parameters);
-  void apply_parameters(const std::vector<rclcpp::Parameter> & parameters);
+    const std::shared_ptr<tricycle_controller_msgs::srv::SetExactMode::Request> req,
+    std::shared_ptr<tricycle_controller_msgs::srv::SetExactMode::Response> res);
   void clip_wheel_speed_and_steering_angle(double & wheel_speed, double & steering_angle);
   void clip_speed_for_angle(double & wheel_speed, double steering_angle);
   void clip_angle_for_speed(double & steering_angle, double wheel_speed);
