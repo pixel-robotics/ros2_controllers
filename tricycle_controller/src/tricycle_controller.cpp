@@ -398,7 +398,7 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
   cmd_vel_timeout_ = std::chrono::milliseconds{params_.cmd_vel_timeout};
   params_.publish_ackermann_command =
     get_node()->get_parameter("publish_ackermann_command").as_bool();
-  exact_mode_threshold_ = get_node()->get_parameter("exact_mode_threshold").as_double();
+  exact_mode_threshold_ = params_.exact_mode_threshold;
   low_speed_threshold_ = get_node()->get_parameter("low_speed_threshold").as_double();
   stationary_time_threshold_ = get_node()->get_parameter("stationary_time_threshold").as_double();
 
@@ -559,10 +559,11 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
                                   std::placeholders::_2, std::placeholders::_3));
 
   // Create set exact mode service
-  set_exact_mode_service_ = get_node()->create_service<std_srvs::srv::SetBool>(
-    DEFAULT_SET_EXACT_MODE_SERVICE, std::bind(
-                                  &TricycleController::set_exact_mode, this, std::placeholders::_1,
-                                  std::placeholders::_2, std::placeholders::_3));
+  set_exact_mode_service_ = get_node()->create_service<tricycle_controller_msgs::srv::SetExactMode>(
+    DEFAULT_SET_EXACT_MODE_SERVICE,
+    std::bind(
+      &TricycleController::set_exact_mode, this, std::placeholders::_1, std::placeholders::_2,
+      std::placeholders::_3));
 
   return CallbackReturn::SUCCESS;
 }
@@ -628,23 +629,49 @@ void TricycleController::reset_odometry(
 
 void TricycleController::set_exact_mode(
   const std::shared_ptr<rmw_request_id_t> /*request_header*/,
-  const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
-  std::shared_ptr<std_srvs::srv::SetBool::Response> /*res*/)
+  const std::shared_ptr<tricycle_controller_msgs::srv::SetExactMode::Request> req,
+  std::shared_ptr<tricycle_controller_msgs::srv::SetExactMode::Response> res)
 {
+  // 0 = unset: the configured parameter (30 deg by default, right for the
+  // steering transitions of normal driving); a spin on the spot passes a tight
+  // threshold so that the wheel is at lock before the robot moves.
+  const double threshold = req->threshold == 0.0 ? params_.exact_mode_threshold : req->threshold;
+  // <= 0 would never release traction, > pi is meaningless for a steering
+  // error (NaN fails both comparisons and is rejected as well)
+  if (!(threshold > 0.0 && threshold <= M_PI))
+  {
+    res->success = false;
+    res->message = "exact mode threshold must be in (0, pi] rad";
+    RCLCPP_WARN(
+      get_node()->get_logger(), "Rejected exact mode threshold %.3f rad: %s", threshold,
+      res->message.c_str());
+    return;
+  }
+  res->success = true;
+
   // The caller (behavior tree) re-asserts the desired mode on every leg, so this
   // service is called far more often than the mode actually changes. Log the
   // transition, not the call, otherwise a single unchanged setting produces hundreds
   // of identical INFO records per run.
-  if (req->data == use_exact_mode_)
+  const bool was_enabled = use_exact_mode_;
+  const bool threshold_changed = threshold != exact_mode_threshold_;
+  // threshold first: the real-time loop must never see the new mode with the old threshold
+  exact_mode_threshold_ = threshold;
+  use_exact_mode_ = req->enable;
+  if (req->enable && (!was_enabled || threshold_changed))
+  {
+    RCLCPP_INFO(get_node()->get_logger(), "Exact mode enabled (threshold %.3f rad)", threshold);
+  }
+  else if (!req->enable && was_enabled)
+  {
+    RCLCPP_INFO(get_node()->get_logger(), "Exact mode disabled");
+  }
+  else
   {
     RCLCPP_DEBUG(
       get_node()->get_logger(), "Exact mode already %s, nothing to do",
-      use_exact_mode_ ? "enabled" : "disabled");
-    return;
+      req->enable ? "enabled" : "disabled");
   }
-
-  use_exact_mode_ = req->data;
-  RCLCPP_INFO(get_node()->get_logger(), "Exact mode %s", use_exact_mode_ ? "enabled" : "disabled");
 }
 
 bool TricycleController::reset()

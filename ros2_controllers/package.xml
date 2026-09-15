@@ -37,6 +37,7 @@
   <exec_depend>range_sensor_broadcaster</exec_depend>
   <exec_depend>steering_controllers_library</exec_depend>
   <exec_depend>tricycle_controller</exec_depend>
+  <exec_depend>tricycle_controller_msgs</exec_depend>
   <exec_depend>tricycle_steering_controller</exec_depend>
   <exec_depend>velocity_controllers</exec_depend>
 

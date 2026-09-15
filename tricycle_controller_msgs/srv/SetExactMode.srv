@@ -1,0 +1,11 @@
+# Switch the tricycle controller's exact mode: while enabled, traction is held
+# until the steering error is below the threshold (instead of scaling down with
+# the error as in normal driving).
+bool enable
+# Steering error [rad] below which traction is released while exact mode is
+# enabled. 0.0 (unset) selects the controller's exact_mode_threshold parameter.
+# Valid range (0, pi].
+float64 threshold
+---
+bool success
+string message

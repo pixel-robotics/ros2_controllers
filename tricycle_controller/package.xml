@@ -37,6 +37,7 @@
   <depend>std_srvs</depend>
   <depend>tf2</depend>
   <depend>tf2_msgs</depend>
+  <depend>tricycle_controller_msgs</depend>
 
   <test_depend>ament_cmake_gmock</test_depend>
   <test_depend>controller_manager</test_depend>
