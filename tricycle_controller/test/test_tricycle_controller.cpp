@@ -65,6 +65,7 @@ public:
   }
 
   bool churn_active() const { return churn_active_; }
+  void set_use_exact_mode(bool on) { use_exact_mode_ = on; }
 
   std::shared_ptr<geometry_msgs::msg::TwistStamped> getLastReceivedTwist()
   {
@@ -441,6 +442,54 @@ protected:
   double steering_cmd() const { return steering_joint_pos_cmd_.get_value(); }
   double traction_cmd() const { return traction_joint_vel_cmd_.get_value(); }
 };
+
+// wfal-amr4 2026-09-14: the spin's traction started while the wheel was still
+// at 70 deg (target 90 deg) because the exact-mode threshold is 30 deg. The
+// behavior tree tightens the threshold for the spin at runtime.
+TEST_F(TestTricycleControllerSteering, exact_mode_threshold_is_reconfigurable_at_runtime)
+{
+  init_and_activate({rclcpp::Parameter("exact_mode_threshold", 0.5233)});
+  controller_->set_use_exact_mode(true);
+  double t = 0.0;
+
+  // spin demand (+90 deg), wheel still at 70 deg: inside the 30 deg default
+  steering_state_ = 70.0 * M_PI / 180.0;
+  for (int i = 0; i < 5; ++i, t += DT) step(0.0, 0.3, t);
+  EXPECT_GT(traction_cmd(), 0.0) << "20 deg of steering error is inside the 30 deg threshold";
+
+  // tightened at runtime: 20 deg short of lock releases no traction any more
+  const auto result =
+    controller_->get_node()->set_parameter(rclcpp::Parameter("exact_mode_threshold", 0.05));
+  ASSERT_TRUE(result.successful) << result.reason;
+  for (int i = 0; i < 25; ++i, t += DT) step(0.0, 0.3, t);
+  EXPECT_DOUBLE_EQ(traction_cmd(), 0.0);
+
+  // wheel essentially at lock: traction is released
+  steering_state_ = M_PI_2 - 0.02;
+  for (int i = 0; i < 5; ++i, t += DT) step(0.0, 0.3, t);
+  EXPECT_GT(traction_cmd(), 0.0);
+
+  // restored: the 70 deg wheel drives again
+  ASSERT_TRUE(
+    controller_->get_node()->set_parameter(rclcpp::Parameter("exact_mode_threshold", 0.5233))
+      .successful);
+  steering_state_ = 70.0 * M_PI / 180.0;
+  for (int i = 0; i < 5; ++i, t += DT) step(0.0, 0.3, t);
+  EXPECT_GT(traction_cmd(), 0.0);
+
+  // out-of-range values are rejected and leave the threshold untouched
+  EXPECT_FALSE(
+    controller_->get_node()->set_parameter(rclcpp::Parameter("exact_mode_threshold", 0.0))
+      .successful);
+  EXPECT_FALSE(
+    controller_->get_node()->set_parameter(rclcpp::Parameter("exact_mode_threshold", -0.1))
+      .successful);
+  EXPECT_FALSE(
+    controller_->get_node()->set_parameter(rclcpp::Parameter("exact_mode_threshold", 4.0))
+      .successful);
+  EXPECT_DOUBLE_EQ(
+    controller_->get_node()->get_parameter("exact_mode_threshold").as_double(), 0.5233);
+}
 
 TEST_F(TestTricycleControllerSteering, near_zero_twist_holds_the_steering_instead_of_spinning_it)
 {

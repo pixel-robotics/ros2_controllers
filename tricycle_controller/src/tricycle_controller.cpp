@@ -60,6 +60,14 @@ CallbackReturn TricycleController::on_init()
     // Create the parameter listener and get the parameters
     param_listener_ = std::make_shared<ParamListener>(get_node());
     params_ = param_listener_->get_params();
+
+    // exact_mode_threshold is reconfigurable at runtime (`ros2 param set`, or
+    // the behavior tree tightening it for an on-the-spot spin): validate the
+    // request, apply it once the parameter has actually been set.
+    on_set_parameters_callback_handle_ = get_node()->add_on_set_parameters_callback(
+      std::bind(&TricycleController::validate_parameters, this, std::placeholders::_1));
+    post_set_parameters_callback_handle_ = get_node()->add_post_set_parameters_callback(
+      std::bind(&TricycleController::apply_parameters, this, std::placeholders::_1));
   }
   catch (const std::exception & e)
   {
@@ -644,7 +652,60 @@ void TricycleController::set_exact_mode(
   }
 
   use_exact_mode_ = req->data;
-  RCLCPP_INFO(get_node()->get_logger(), "Exact mode %s", use_exact_mode_ ? "enabled" : "disabled");
+  if (use_exact_mode_)
+  {
+    RCLCPP_INFO(
+      get_node()->get_logger(), "Exact mode enabled (threshold %.3f rad)",
+      exact_mode_threshold_.load());
+  }
+  else
+  {
+    RCLCPP_INFO(get_node()->get_logger(), "Exact mode disabled");
+  }
+}
+
+rcl_interfaces::msg::SetParametersResult TricycleController::validate_parameters(
+  const std::vector<rclcpp::Parameter> & parameters)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  for (const auto & parameter : parameters)
+  {
+    if (parameter.get_name() != "exact_mode_threshold")
+    {
+      continue;
+    }
+    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
+    {
+      result.successful = false;
+      result.reason = "exact_mode_threshold must be a double";
+      return result;
+    }
+    const double value = parameter.as_double();
+    // <= 0 would never release traction in exact mode, > pi is meaningless for
+    // a steering error (NaN fails both comparisons and is rejected as well)
+    if (!(value > 0.0 && value <= M_PI))
+    {
+      result.successful = false;
+      result.reason = "exact_mode_threshold must be in (0, pi] rad";
+      return result;
+    }
+  }
+  return result;
+}
+
+void TricycleController::apply_parameters(const std::vector<rclcpp::Parameter> & parameters)
+{
+  for (const auto & parameter : parameters)
+  {
+    if (parameter.get_name() == "exact_mode_threshold")
+    {
+      exact_mode_threshold_ = parameter.as_double();
+      RCLCPP_INFO(
+        get_node()->get_logger(), "Exact mode threshold set to %.3f rad",
+        exact_mode_threshold_.load());
+    }
+  }
 }
 
 bool TricycleController::reset()
