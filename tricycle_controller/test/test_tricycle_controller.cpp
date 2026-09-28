@@ -626,6 +626,83 @@ TEST_F(TestTricycleControllerSteering, settled_demand_during_churn_episode_is_fo
   EXPECT_GT(std::abs(traction_cmd()), 0.1);
 }
 
+// workflow_side_platform (gazebo nightly, 2026-09-15..27): TEB creeps toward
+// the approach goal at 0.03-0.17 m/s with a turning direction that never
+// settles. The filter held the wheel at zero speed, so odometry stayed
+// "stationary" and the episode never ended: the AMR stood still until
+// navigation gave up. A drive demand is followed after max_hold_time.
+TEST_F(TestTricycleControllerSteering, unsettled_drive_demand_is_followed_after_max_hold_time)
+{
+  init_and_activate({rclcpp::Parameter("steering_churn.max_hold_time", 3.0)});
+  double t = 0.0;
+  double detected_at = -1.0;
+  double max_abs_traction_held = 0.0;
+  double max_abs_traction_released = 0.0;
+  double max_abs_traction_held_again = 0.0;
+  // the fixture's odometry never moves: the release must end after
+  // max_hold_time and the demand be held again
+  for (int i = 0; i < 600; ++i, t += DT)
+  {
+    const double w = ((i / 5) % 2 == 0) ? CREEP_W : -CREEP_W;
+    step(CREEP_V, w, t);
+    if (detected_at < 0.0 && controller_->churn_active()) detected_at = t;
+    if (detected_at < 0.0) continue;
+    const double since = t - detected_at;
+    if (since > 0.1 && since < 2.9)
+    {
+      max_abs_traction_held = std::max(max_abs_traction_held, std::abs(traction_cmd()));
+    }
+    else if (since > 3.1 && since < 5.9)
+    {
+      max_abs_traction_released = std::max(max_abs_traction_released, std::abs(traction_cmd()));
+    }
+    else if (since > 6.3 && since < 8.9)
+    {
+      max_abs_traction_held_again =
+        std::max(max_abs_traction_held_again, std::abs(traction_cmd()));
+    }
+  }
+  ASSERT_GT(detected_at, 0.0) << "churn episode was not detected";
+  ASSERT_LT(detected_at, 2.0);
+  EXPECT_EQ(max_abs_traction_held, 0.0);
+  EXPECT_GT(max_abs_traction_released, 0.01);
+  EXPECT_EQ(max_abs_traction_held_again, 0.0);
+}
+
+// Below low_speed_threshold following the demand would not make the robot
+// count as moving, so the episode could not end: such demands stay held.
+TEST_F(TestTricycleControllerSteering, unsettled_creep_below_low_speed_threshold_stays_held)
+{
+  init_and_activate({rclcpp::Parameter("steering_churn.max_hold_time", 1.0)});
+  double t = 0.0;
+  double detected_at = -1.0;
+  double frozen_at = 0.0;
+  double max_abs_deviation_after = 0.0;
+  double max_abs_traction_after = 0.0;
+  for (int i = 0; i < 400; ++i, t += DT)
+  {
+    const double w = ((i / 5) % 2 == 0) ? 0.015 : -0.015;
+    step(0.006, w, t);
+    if (detected_at < 0.0 && controller_->churn_active())
+    {
+      detected_at = t;
+      frozen_at = steering_cmd();
+    }
+    else if (detected_at >= 0.0)
+    {
+      max_abs_deviation_after =
+        std::max(max_abs_deviation_after, std::abs(steering_cmd() - frozen_at));
+      if (t > detected_at + 0.1)
+      {
+        max_abs_traction_after = std::max(max_abs_traction_after, std::abs(traction_cmd()));
+      }
+    }
+  }
+  ASSERT_GT(detected_at, 0.0) << "churn episode was not detected";
+  EXPECT_LT(max_abs_deviation_after, 0.05);
+  EXPECT_EQ(max_abs_traction_after, 0.0);
+}
+
 TEST_F(TestTricycleControllerSteering, spin_rule_flip_while_stopping_is_not_churn_evidence)
 {
   init_and_activate();

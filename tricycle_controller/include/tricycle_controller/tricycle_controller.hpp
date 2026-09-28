@@ -120,10 +120,14 @@ protected:
 
   /**
    * \brief Debounce the steering demand while the churn filter is active.
+   * \param drive_commanded the commanded linear speed would make the robot
+   *        count as moving (|v| >= low_speed_threshold)
    * \param [out] settled true if the raw demand agrees with the forwarded target
    * \return the steering target to forward
    */
-  double churn_filter(double alpha_demand, double now, double last_steering_cmd, bool & settled);
+  double churn_filter(
+    double alpha_demand, bool drive_commanded, double now, double last_steering_cmd,
+    bool & settled);
 
   void publish_churn_state(bool active, const std::string & text);
 
@@ -201,6 +205,9 @@ protected:
   double debounced_target_ = 0.0;
   double pending_target_ = 0.0;
   double pending_since_ = 0.0;
+  double unsettled_since_ = 0.0;
+  bool churn_filter_released_ = false;
+  double churn_released_since_ = 0.0;
 
   std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> churn_active_publisher_ = nullptr;
   std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Bool>>

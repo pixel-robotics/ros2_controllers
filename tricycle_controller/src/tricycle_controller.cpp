@@ -259,8 +259,10 @@ controller_interface::return_type TricycleController::update(
     if (churn_filter_active)
     {
       bool settled = false;
+      const bool drive_commanded = std::abs(linear_command) >= low_speed_threshold_;
       alpha_write = churn_filter(
-        alpha_write, time.seconds(), previous_commands_.back().steering_angle, settled);
+        alpha_write, drive_commanded, time.seconds(), previous_commands_.back().steering_angle,
+        settled);
       churn_debouncing = !settled;
       if (!settled)
       {
@@ -697,6 +699,7 @@ bool TricycleController::reset()
   last_demand_direction_ = 0;
   churn_active_ = false;
   churn_filter_was_active_ = false;
+  churn_filter_released_ = false;
   churn_reversals_in_window_ = 0;
   churn_travel_in_window_ = 0.0;
 
@@ -897,7 +900,8 @@ void TricycleController::update_churn_monitor(
 }
 
 double TricycleController::churn_filter(
-  double alpha_demand, double now, double last_steering_cmd, bool & settled)
+  double alpha_demand, bool drive_commanded, double now, double last_steering_cmd,
+  bool & settled)
 {
   const auto & cfg = params_.steering_churn;
   if (!churn_filter_was_active_)
@@ -906,7 +910,25 @@ double TricycleController::churn_filter(
     debounced_target_ = last_steering_cmd;
     pending_target_ = alpha_demand;
     pending_since_ = now;
+    unsettled_since_ = now;
+    churn_filter_released_ = false;
     churn_filter_was_active_ = true;
+  }
+  if (churn_filter_released_)
+  {
+    if (now - churn_released_since_ < cfg.max_hold_time)
+    {
+      settled = true;
+      return alpha_demand;
+    }
+    // the robot did not start moving during the release: hold again from
+    // where the wheel is now, so a churning demand is followed at most half
+    // of the time
+    churn_filter_released_ = false;
+    debounced_target_ = last_steering_cmd;
+    pending_target_ = alpha_demand;
+    pending_since_ = now;
+    unsettled_since_ = now;
   }
   if (std::abs(alpha_demand - pending_target_) > cfg.debounce_tolerance)
   {
@@ -916,8 +938,29 @@ double TricycleController::churn_filter(
   else if (now - pending_since_ >= cfg.debounce_time)
   {
     debounced_target_ = pending_target_;
+    // only a demand that persisted for debounce_time restarts the hold: a
+    // demand flipping across the frozen target agrees with it for single
+    // cycles only
+    unsettled_since_ = now;
   }
   settled = std::abs(alpha_demand - debounced_target_) <= cfg.debounce_tolerance;
+  if (!settled && drive_commanded && now - unsettled_since_ >= cfg.max_hold_time)
+  {
+    // Holding the wheel at zero speed keeps the odometry "stationary", which
+    // keeps the episode armed: a drive demand that never settles (a planner
+    // creeping with a flipping turn direction) would be held forever. Follow
+    // it for a while; once the robot moves the monitor clears and the filter
+    // lets go.
+    churn_filter_released_ = true;
+    churn_released_since_ = now;
+    RCLCPP_WARN(
+      get_node()->get_logger(),
+      "Steering churn filter: drive demand not settled within %.1f s, following it for up "
+      "to %.1f s",
+      cfg.max_hold_time, cfg.max_hold_time);
+    settled = true;
+    return alpha_demand;
+  }
   return debounced_target_;
 }
 
