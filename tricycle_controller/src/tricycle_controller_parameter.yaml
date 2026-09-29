@@ -269,7 +269,9 @@ tricycle_controller:
     # (debounce_time / debounce_tolerance) and wheel speed is cut until the
     # demand settles; the steering_stationary limits apply only while a demand
     # is still being debounced, a settled demand is followed with the regular
-    # (low-speed) limits. Spin-rule demands (v == 0 -> +-90 deg) and held
+    # (low-speed) limits. A demand that flips between forward and backward with
+    # a steady turning direction is replaced by the spin both demands share
+    # (resolve_to_spin). Spin-rule demands (v == 0 -> +-90 deg) and held
     # demands (steering_hold) are not counted as evidence. State is published
     # on ~/steering_churn_active (Bool) and ~/steering_churn (String, one
     # message at episode start and end).
@@ -333,6 +335,11 @@ tricycle_controller:
       validation: {
         gt<>: [0.0]
       }
+    }
+    resolve_to_spin: {
+      type: bool,
+      default_value: true,
+      description: "While the churn filter is active, a demand that flips between forward and backward while the turning direction stays the same is replaced by a spin in that turning direction (both demands turn the robot the same way) instead of holding the wheel until it settles.",
     }
   use_clipping: {
     type: bool,

@@ -258,6 +258,20 @@ controller_interface::return_type TricycleController::update(
     churn_filter_active = churn_active_ && stationary;
     if (churn_filter_active)
     {
+      // TEB flipping between creeping on and backing up with a steady turning
+      // direction never settles while the robot stands still, and holding the
+      // wheel keeps it standing (miele-amr1 2026-09-29: 480 s). Both demands
+      // turn the robot the same way: command that spin.
+      if (
+        params_.steering_churn.resolve_to_spin && !steering_held &&
+        churn_demand_is_spin(linear_command, angular_command))
+      {
+        std::tie(alpha_write, Ws_write) = twist_to_ackermann(0.0, angular_command);
+        if (params_.use_clipping)
+        {
+          clip_wheel_speed_and_steering_angle(Ws_write, alpha_write);
+        }
+      }
       bool settled = false;
       alpha_write = churn_filter(
         alpha_write, time.seconds(), previous_commands_.back().steering_angle, settled);
@@ -271,6 +285,9 @@ controller_interface::return_type TricycleController::update(
     else
     {
       churn_filter_was_active_ = false;
+      churn_linear_sign_ = 0;
+      churn_angular_sign_ = 0;
+      churn_spin_direction_ = 0;
     }
   }
 
@@ -697,6 +714,9 @@ bool TricycleController::reset()
   last_demand_direction_ = 0;
   churn_active_ = false;
   churn_filter_was_active_ = false;
+  churn_linear_sign_ = 0;
+  churn_angular_sign_ = 0;
+  churn_spin_direction_ = 0;
   churn_reversals_in_window_ = 0;
   churn_travel_in_window_ = 0.0;
 
@@ -919,6 +939,34 @@ double TricycleController::churn_filter(
   }
   settled = std::abs(alpha_demand - debounced_target_) <= cfg.debounce_tolerance;
   return debounced_target_;
+}
+
+bool TricycleController::churn_demand_is_spin(double linear_command, double angular_command)
+{
+  const int linear_sign = (linear_command > 0.0) - (linear_command < 0.0);
+  const int angular_sign = (angular_command > 0.0) - (angular_command < 0.0);
+  if (angular_sign == 0)
+  {
+    // no turn to share (exact zero twist or a straight demand)
+    return false;
+  }
+  if (churn_spin_direction_ != 0 && angular_sign != churn_spin_direction_)
+  {
+    // the turning direction flipped as well: hold the wheel as before
+    churn_spin_direction_ = 0;
+  }
+  else if (
+    churn_spin_direction_ == 0 && churn_linear_sign_ != 0 && linear_sign != 0 &&
+    linear_sign != churn_linear_sign_ && angular_sign == churn_angular_sign_)
+  {
+    churn_spin_direction_ = angular_sign;
+  }
+  if (linear_sign != 0)
+  {
+    churn_linear_sign_ = linear_sign;
+  }
+  churn_angular_sign_ = angular_sign;
+  return churn_spin_direction_ != 0;
 }
 
 void TricycleController::publish_churn_state(bool active, const std::string & text)

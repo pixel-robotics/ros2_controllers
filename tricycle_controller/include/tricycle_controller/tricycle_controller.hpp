@@ -125,6 +125,14 @@ protected:
    */
   double churn_filter(double alpha_demand, double now, double last_steering_cmd, bool & settled);
 
+  /**
+   * \brief While the churn filter is active: true once the demand has flipped
+   * between forward and backward with the turning direction unchanged. Both
+   * demands turn the robot the same way, so the caller commands the spin they
+   * share. A flip of the turning direction ends it (nothing to share).
+   */
+  bool churn_demand_is_spin(double linear_command, double angular_command);
+
   void publish_churn_state(bool active, const std::string & text);
 
   // Parameters from ROS for tricycle_controller
@@ -201,6 +209,9 @@ protected:
   double debounced_target_ = 0.0;
   double pending_target_ = 0.0;
   double pending_since_ = 0.0;
+  int churn_linear_sign_ = 0;     // of the last forward/backward demand while filtering
+  int churn_angular_sign_ = 0;    // of the last turning demand while filtering
+  int churn_spin_direction_ = 0;  // +-1 while a forward/backward flip is resolved to a spin
 
   std::shared_ptr<rclcpp::Publisher<std_msgs::msg::Bool>> churn_active_publisher_ = nullptr;
   std::shared_ptr<realtime_tools::RealtimePublisher<std_msgs::msg::Bool>>
