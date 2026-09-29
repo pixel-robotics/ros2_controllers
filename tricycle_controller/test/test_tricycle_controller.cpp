@@ -626,6 +626,39 @@ TEST_F(TestTricycleControllerSteering, settled_demand_during_churn_episode_is_fo
   EXPECT_GT(std::abs(traction_cmd()), 0.1);
 }
 
+TEST_F(TestTricycleControllerSteering, forward_backward_flip_with_steady_turn_becomes_a_spin)
+{
+  init_and_activate();
+  double t = 0.0;
+
+  // miele-amr1 2026-09-29 11:34:20 UTC: after a standstill fork lift TEB kept a
+  // steady CCW turn (w ~ +0.15 rad/s) but flipped between creeping forward and
+  // backward (v +0.06 / -0.04). The demand jumped between +68 and -75 deg, never
+  // settled, and the wheel was held at zero speed for 480 s. Both demands turn
+  // the robot the same way, so the filter turns it on the spot towards w. The
+  // robot stays "stationary" here (no traction feedback), the wheel follows its
+  // command.
+  bool detected = false;
+  double max_abs_deviation_last_s = 0.0;
+  double min_traction_last_s = 1e9;
+  for (int i = 0; i < 300; ++i, t += DT)
+  {
+    const double v = ((i / 5) % 2 == 0) ? 0.06 : -0.04;
+    step(v, 0.15, t);
+    steering_state_ = steering_cmd();
+    detected = detected || controller_->churn_active();
+    if (t > 5.0)
+    {
+      max_abs_deviation_last_s =
+        std::max(max_abs_deviation_last_s, std::abs(steering_cmd() - M_PI_2));
+      min_traction_last_s = std::min(min_traction_last_s, traction_cmd());
+    }
+  }
+  ASSERT_TRUE(detected) << "churn episode was not detected";
+  EXPECT_LT(max_abs_deviation_last_s, 0.05) << "the wheel should sit at +90 deg for the spin";
+  EXPECT_GT(min_traction_last_s, 0.1) << "the spin should drive, not hold the wheel";
+}
+
 TEST_F(TestTricycleControllerSteering, spin_rule_flip_while_stopping_is_not_churn_evidence)
 {
   init_and_activate();
