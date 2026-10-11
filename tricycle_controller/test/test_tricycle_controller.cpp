@@ -654,6 +654,51 @@ TEST_F(TestTricycleControllerSteering, spin_rule_flip_while_stopping_is_not_chur
   EXPECT_GT(traction_cmd(), 0.1);
 }
 
+TEST_F(TestTricycleControllerSteering, collision_monitor_stop_flicker_holds_the_steering)
+{
+  init_and_activate({rclcpp::Parameter("steering_hold.zero_hold_time", 5.0)});
+  double t = 0.0;
+
+  // Replay of amr47 2026-10-11 22:42:10-22:42:41 (rosbags_20261011_224156_6):
+  // reversing on the close-putdown arc, the collision monitor STOPs on a wall
+  // at the stop field edge and releases to LIMIT for one lidar scan (0.18 s)
+  // whenever the field holds 3 instead of 4 points. Its output alternates
+  // between (0, 0) and the limited arc; re-centring the wheel on every stop
+  // swung the demand 0 <-> -1.1 rad and started a churn episode.
+  const double arc_v = -0.019;
+  const double arc_w = 0.037;
+  const double arc_alpha = std::atan(arc_w * 1.0 / arc_v);
+  const std::vector<std::pair<bool, double>> cm_output = {
+    {true, 2.26}, {false, 2.28}, {true, 0.18}, {false, 0.52}, {true, 0.18}, {false, 4.06},
+    {true, 0.18}, {false, 3.16}, {true, 0.18}, {false, 1.24}, {true, 0.18}, {false, 0.88},
+    {true, 0.16}, {false, 1.78}, {true, 0.16}};
+  double flicker_start = -1.0;
+  for (const auto & [moving, duration] : cm_output)
+  {
+    const double t0 = t;
+    for (; t < t0 + duration; t += DT)
+    {
+      step(moving ? arc_v : 0.0, moving ? arc_w : 0.0, t);
+      if (flicker_start >= 0.0)
+      {
+        EXPECT_NEAR(steering_cmd(), arc_alpha, 0.05) << "at t=" << t;
+      }
+      EXPECT_FALSE(controller_->churn_active()) << "at t=" << t;
+    }
+    if (flicker_start < 0.0)
+    {
+      ASSERT_NEAR(steering_cmd(), arc_alpha, 0.05) << "wheel did not reach the arc";
+      flicker_start = t;
+    }
+  }
+
+  // the stop that followed lasted 7 s: after zero_hold_time the wheel re-centres
+  const double t0 = t;
+  for (; t < t0 + 7.0; t += DT) step(0.0, 0.0, t);
+  EXPECT_NEAR(steering_cmd(), 0.0, 1e-6);
+  EXPECT_FALSE(controller_->churn_active());
+}
+
 TEST_F(TestTricycleControllerSteering, churn_monitor_ignores_demands_while_driving)
 {
   init_and_activate();

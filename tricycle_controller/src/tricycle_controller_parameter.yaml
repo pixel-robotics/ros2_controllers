@@ -262,6 +262,19 @@ tricycle_controller:
         gt_eq<>: [0.0]
       }
     }
+    # An exact (0, 0) twist is what an upstream stop sends (collision monitor
+    # STOP, cmd_vel timeout, end of a goal). Re-centring the wheel on it and
+    # re-aiming on the next motion command turned a flickering stop into
+    # steering churn (amr47 2026-10-11 22:42: STOP / one-scan LIMIT on a wall
+    # at the stop field edge swung the demand 0 <-> -1.18 rad).
+    zero_hold_time: {
+      type: double,
+      default_value: 0.0, # seconds
+      description: "An exact zero twist keeps the last steering command for this long before the wheel is re-centred. Such zero demands, including the re-centre after the hold, are not steering churn evidence. 0 re-centres immediately.",
+      validation: {
+        gt_eq<>: [0.0]
+      }
+    }
   steering_churn:
     # Monitor for steering demands that make the wheel churn while the robot
     # stands still (rapid direction reversals, or large repeated swings). While

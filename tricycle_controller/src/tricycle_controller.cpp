@@ -210,8 +210,12 @@ controller_interface::return_type TricycleController::update(
   // A twist that is (almost) zero carries no motion: keep the wheel where it is
   // instead of turning it to the +-90 deg the spin rule would produce.
   const bool steering_held =
-    apply_steering_hold(linear_command, angular_command, alpha_write, Ws_write);
-  const bool churn_evidence = !spin_rule_demand && !steering_held;
+    apply_steering_hold(linear_command, angular_command, time.seconds(), alpha_write, Ws_write);
+  // With zero_hold_time the re-centre after the hold needs a full hold time of
+  // standstill commands, so it cannot churn the wheel either.
+  const bool held_zero_recentre = params_.steering_hold.zero_hold_time > 0.0 &&
+    linear_command == 0.0 && angular_command == 0.0;
+  const bool churn_evidence = !spin_rule_demand && !steering_held && !held_zero_recentre;
 
   // When steering angle slightly exceeds max turning rate at high speed, it should be capped to steering_angle_limit_high_speed
   if (Ws_write >= params_.high_speed_threshold &&
@@ -690,6 +694,7 @@ bool TricycleController::reset()
 
   // Reset stationary timer
   stationary_timer_ = 0.0;
+  zero_command_since_ = -1.0;
 
   // Reset churn monitor
   churn_events_.clear();
@@ -805,13 +810,23 @@ double TricycleController::convert_trans_rot_vel_to_steering_angle(
 }
 
 bool TricycleController::apply_steering_hold(
-  double linear_command, double angular_command, double & alpha, double & Ws)
+  double linear_command, double angular_command, double now, double & alpha, double & Ws)
 {
   const bool exactly_zero = linear_command == 0.0 && angular_command == 0.0;
+  if (!exactly_zero)
+  {
+    zero_command_since_ = -1.0;
+  }
+  else if (zero_command_since_ < 0.0)
+  {
+    zero_command_since_ = now;
+  }
+  const bool zero_held =
+    exactly_zero && now - zero_command_since_ < params_.steering_hold.zero_hold_time;
   const bool below_thresholds =
     std::abs(linear_command) < params_.steering_hold.linear_threshold &&
     std::abs(angular_command) < params_.steering_hold.angular_threshold;
-  if (exactly_zero || !below_thresholds || previous_commands_.empty())
+  if ((exactly_zero && !zero_held) || !below_thresholds || previous_commands_.empty())
   {
     return false;
   }

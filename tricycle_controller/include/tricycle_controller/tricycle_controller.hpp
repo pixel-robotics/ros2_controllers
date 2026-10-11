@@ -103,11 +103,12 @@ protected:
   /**
    * \brief Steering hold rule: a twist that is not exactly zero but below the
    * steering_hold thresholds carries no motion, so keep the last steering
-   * command and command zero wheel speed instead of converting it.
+   * command and command zero wheel speed instead of converting it. An exact
+   * zero twist keeps the last steering command for steering_hold.zero_hold_time.
    * \return true if the hold was applied
    */
   bool apply_steering_hold(
-    double linear_command, double angular_command, double & alpha, double & Ws);
+    double linear_command, double angular_command, double now, double & alpha, double & Ws);
 
   /**
    * \brief Collect churn evidence from the steering demand while stationary and
@@ -174,6 +175,9 @@ protected:
   double low_speed_threshold_ = 0.1;  // m/s
   double stationary_time_threshold_ = 20.0;  // seconds
   double stationary_timer_ = 0.0;  // seconds
+  // Start of the current run of exact zero twists (steering_hold.zero_hold_time),
+  // negative while the twist is not exactly zero
+  double zero_command_since_ = -1.0;  // seconds
 
   // Exact mode: traction is released only once the steering error is below
   // exact_mode_threshold_. Both are written by the set_exact_mode service and
