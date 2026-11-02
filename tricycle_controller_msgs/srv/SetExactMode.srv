@@ -6,6 +6,13 @@ bool enable
 # enabled. 0.0 (unset) selects the controller's exact_mode_threshold parameter.
 # Valid range (0, pi].
 float64 threshold
+# While exact mode is enabled: a turn on the spot (v == 0, w != 0) keeps the
+# wheel on the +-90 deg side it already stands on (last steering command) and
+# reverses traction for the other turn direction, instead of the spin rule's
+# +90 deg for w > 0 / -90 deg for w < 0 (a lock-to-lock swing of ~180 deg,
+# 3-4.5 s, at a spin start or a retry). A wheel within 0.1 rad of straight
+# has no side to keep. Cleared with exact mode.
+bool keep_wheel_side
 ---
 bool success
 string message

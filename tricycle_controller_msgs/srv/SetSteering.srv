@@ -1,0 +1,13 @@
+# Turn the steering wheel to `angle` while the robot stands, without moving it.
+# The target applies to standstill commands only (an exact zero twist, a
+# command timeout, or a twist below the steering_hold thresholds): traction is
+# zero and the wheel is turned to the target at the steering limits, overriding
+# steering_hold.zero_hold_time. The first command that carries motion releases
+# the target and normal control continues. The call returns at once; the
+# caller watches the steering joint state for the wheel to arrive (e.g. the
+# behavior tree turns the wheel straight after a spin on the spot while it
+# stands anyway, so the next straight drive starts at once).
+float64 angle  # [rad], |angle| <= steering.max_position
+---
+bool success
+string message
