@@ -186,6 +186,8 @@ protected:
   // read in the real-time update loop, hence atomic.
   std::atomic<bool> use_exact_mode_{false};
   std::atomic<double> exact_mode_threshold_{M_PI / 6};
+  // set_exact_mode keep_wheel_side: turns on the spot stay on the wheel's side
+  std::atomic<bool> keep_wheel_side_{false};
 
   // Steering target for a standing robot (set_steering service): applied to
   // standstill commands until a command carries motion. Written by the service,

@@ -68,11 +68,12 @@ public:
   void set_use_exact_mode(bool on) { use_exact_mode_ = on; }
   /// Call the set_exact_mode service handler directly (no executor needed).
   tricycle_controller_msgs::srv::SetExactMode::Response call_set_exact_mode(
-    bool enable, double threshold = 0.0)
+    bool enable, double threshold = 0.0, bool keep_wheel_side = false)
   {
     auto req = std::make_shared<tricycle_controller_msgs::srv::SetExactMode::Request>();
     req->enable = enable;
     req->threshold = threshold;
+    req->keep_wheel_side = keep_wheel_side;
     auto res = std::make_shared<tricycle_controller_msgs::srv::SetExactMode::Response>();
     set_exact_mode(nullptr, req, res);
     return *res;
@@ -736,6 +737,29 @@ TEST_F(TestTricycleControllerSteering, set_steering_turns_the_standing_wheel_wit
   EXPECT_NEAR(steering_cmd(), M_PI_2, 0.05);
 
   EXPECT_FALSE(controller_->call_set_steering(3.0).success) << "beyond the steering limit";
+}
+
+// wfal lift front 2026-10-30: the spin started with the wheel at -40 deg (or
+// retried in the other direction) and the spin rule swung it lock to lock
+// (3-4.5 s in exact mode). With keep_wheel_side the left turn stays at -90 deg
+// and reverses traction; without it the spin rule's +90 deg applies.
+TEST_F(TestTricycleControllerSteering, keep_wheel_side_turns_on_the_spot_on_the_wheels_side)
+{
+  init_and_activate();
+  double t = 0.0;
+  for (const double t_end = t + 2.0; t < t_end; t += DT) step(0.0, -0.11, t);  // -90 deg
+  ASSERT_NEAR(steering_cmd(), -M_PI_2, 0.05);
+
+  ASSERT_TRUE(controller_->call_set_exact_mode(true, 0.08, true).success);
+  steering_state_ = -M_PI_2;  // wheel at the lock: exact mode releases traction
+  for (const double t_end = t + 0.5; t < t_end; t += DT) step(0.0, 0.11, t);  // turn left
+  EXPECT_NEAR(steering_cmd(), -M_PI_2, 1e-6) << "swung the wheel to the other lock";
+  EXPECT_LT(traction_cmd(), 0.0) << "traction must reverse for the left turn";
+  EXPECT_FALSE(controller_->churn_active());
+
+  ASSERT_TRUE(controller_->call_set_exact_mode(true, 0.08, false).success);
+  for (const double t_end = t + 0.5; t < t_end; t += DT) step(0.0, 0.11, t);
+  EXPECT_GT(steering_cmd(), -M_PI_2 + 0.3) << "spin rule: the wheel turns towards +90 deg";
 }
 
 TEST_F(TestTricycleControllerSteering, churn_monitor_ignores_demands_while_driving)

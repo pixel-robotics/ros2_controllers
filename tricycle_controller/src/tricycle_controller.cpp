@@ -200,6 +200,20 @@ controller_interface::return_type TricycleController::update(
   // Compute wheel velocity and angle
   auto [alpha_write, Ws_write] = twist_to_ackermann(linear_command, angular_command);
 
+  // keep_wheel_side (exact mode): a turn on the spot with the wheel on the other
+  // side than the spin rule's stays there and reverses traction instead.
+  if (use_exact_mode_ && keep_wheel_side_ && linear_command == 0.0 && angular_command != 0.0 &&
+      !previous_commands_.empty())
+  {
+    constexpr double kMinSideAngle = 0.1;  // rad
+    const double side_angle = previous_commands_.back().steering_angle;
+    if (std::abs(side_angle) >= kMinSideAngle && std::signbit(side_angle) != std::signbit(alpha_write))
+    {
+      alpha_write = -alpha_write;
+      Ws_write = -Ws_write;
+    }
+  }
+
   // The spin rule in twist_to_ackermann maps (v == 0, w != 0) to +-90 deg no
   // matter how small |w| is. Upstream produces such twists transiently when a
   // drive is brought to a standstill (TEB's turning-on-spot state, the
@@ -689,6 +703,7 @@ void TricycleController::set_exact_mode(
   const bool threshold_changed = threshold != exact_mode_threshold_;
   // threshold first: the real-time loop must never see the new mode with the old threshold
   exact_mode_threshold_ = threshold;
+  keep_wheel_side_ = req->enable && req->keep_wheel_side;
   use_exact_mode_ = req->enable;
   if (req->enable && (!was_enabled || threshold_changed))
   {
