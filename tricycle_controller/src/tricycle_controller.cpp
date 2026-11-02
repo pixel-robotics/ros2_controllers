@@ -38,6 +38,7 @@ constexpr auto DEFAULT_ODOMETRY_TOPIC = "~/odom";
 constexpr auto DEFAULT_TRANSFORM_TOPIC = "/tf";
 constexpr auto DEFAULT_RESET_ODOM_SERVICE = "~/reset_odometry";
 constexpr auto DEFAULT_SET_EXACT_MODE_SERVICE = "~/set_exact_mode";
+constexpr auto DEFAULT_SET_STEERING_SERVICE = "~/set_steering";
 constexpr auto DEFAULT_CHURN_ACTIVE_TOPIC = "~/steering_churn_active";
 constexpr auto DEFAULT_CHURN_EVENT_TOPIC = "~/steering_churn";
 }  // namespace
@@ -215,7 +216,28 @@ controller_interface::return_type TricycleController::update(
   // standstill commands, so it cannot churn the wheel either.
   const bool held_zero_recentre = params_.steering_hold.zero_hold_time > 0.0 &&
     linear_command == 0.0 && angular_command == 0.0;
-  const bool churn_evidence = !spin_rule_demand && !steering_held && !held_zero_recentre;
+
+  // set_steering: a standing robot turns its wheel to the requested angle (no
+  // traction); the first command that carries motion releases the target.
+  bool steering_targeted = false;
+  if (steering_target_active_)
+  {
+    const bool standstill_command =
+      std::abs(linear_command) < params_.steering_hold.linear_threshold &&
+      std::abs(angular_command) < params_.steering_hold.angular_threshold;
+    if (standstill_command)
+    {
+      alpha_write = steering_target_;
+      Ws_write = 0.0;
+      steering_targeted = true;
+    }
+    else
+    {
+      steering_target_active_ = false;
+    }
+  }
+  const bool churn_evidence =
+    !spin_rule_demand && !steering_held && !held_zero_recentre && !steering_targeted;
 
   // When steering angle slightly exceeds max turning rate at high speed, it should be capped to steering_angle_limit_high_speed
   if (Ws_write >= params_.high_speed_threshold &&
@@ -569,6 +591,12 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
       &TricycleController::set_exact_mode, this, std::placeholders::_1, std::placeholders::_2,
       std::placeholders::_3));
 
+  set_steering_service_ = get_node()->create_service<tricycle_controller_msgs::srv::SetSteering>(
+    DEFAULT_SET_STEERING_SERVICE,
+    std::bind(
+      &TricycleController::set_steering, this, std::placeholders::_1, std::placeholders::_2,
+      std::placeholders::_3));
+
   return CallbackReturn::SUCCESS;
 }
 
@@ -678,6 +706,31 @@ void TricycleController::set_exact_mode(
   }
 }
 
+void TricycleController::set_steering(
+  const std::shared_ptr<rmw_request_id_t> /*request_header*/,
+  const std::shared_ptr<tricycle_controller_msgs::srv::SetSteering::Request> req,
+  std::shared_ptr<tricycle_controller_msgs::srv::SetSteering::Response> res)
+{
+  // steering.max_position limits both directions (NaN = no limit, as in the limiter)
+  const double limit = params_.steering.max_position;
+  if (!std::isfinite(req->angle) || (std::isfinite(limit) && std::abs(req->angle) > limit))
+  {
+    res->success = false;
+    res->message = "steering angle not finite or beyond steering.max_position";
+    RCLCPP_WARN(
+      get_node()->get_logger(), "Rejected steering target %.3f rad: %s", req->angle,
+      res->message.c_str());
+    return;
+  }
+  // target first: the real-time loop must never see the flag with the old target
+  steering_target_ = req->angle;
+  steering_target_active_ = true;
+  res->success = true;
+  RCLCPP_INFO(
+    get_node()->get_logger(), "Steering target %.3f rad until the next motion command",
+    req->angle);
+}
+
 bool TricycleController::reset()
 {
   odometry_.resetOdometry();
@@ -695,6 +748,7 @@ bool TricycleController::reset()
   // Reset stationary timer
   stationary_timer_ = 0.0;
   zero_command_since_ = -1.0;
+  steering_target_active_ = false;
 
   // Reset churn monitor
   churn_events_.clear();

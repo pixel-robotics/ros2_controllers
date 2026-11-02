@@ -42,6 +42,7 @@
 #include "std_srvs/srv/empty.hpp"
 #include "tf2_msgs/msg/tf_message.hpp"
 #include "tricycle_controller_msgs/srv/set_exact_mode.hpp"
+#include "tricycle_controller_msgs/srv/set_steering.hpp"
 
 #include "tricycle_controller/odometry.hpp"
 #include "tricycle_controller/steering_limiter.hpp"
@@ -162,6 +163,7 @@ protected:
 
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_odom_service_;
   rclcpp::Service<tricycle_controller_msgs::srv::SetExactMode>::SharedPtr set_exact_mode_service_;
+  rclcpp::Service<tricycle_controller_msgs::srv::SetSteering>::SharedPtr set_steering_service_;
 
   std::queue<AckermannDrive> previous_commands_;  // last two commands
 
@@ -184,6 +186,12 @@ protected:
   // read in the real-time update loop, hence atomic.
   std::atomic<bool> use_exact_mode_{false};
   std::atomic<double> exact_mode_threshold_{M_PI / 6};
+
+  // Steering target for a standing robot (set_steering service): applied to
+  // standstill commands until a command carries motion. Written by the service,
+  // read and cleared in the real-time update loop, hence atomic.
+  std::atomic<double> steering_target_{0.0};
+  std::atomic<bool> steering_target_active_{false};
 
   // Stationary steering churn monitor (see update_churn_monitor / churn_filter)
   struct ChurnEvent
@@ -226,6 +234,14 @@ protected:
     const std::shared_ptr<rmw_request_id_t> request_header,
     const std::shared_ptr<tricycle_controller_msgs::srv::SetExactMode::Request> req,
     std::shared_ptr<tricycle_controller_msgs::srv::SetExactMode::Response> res);
+  /**
+   * \brief Turn the wheel to an angle while the robot stands (see SetSteering.srv).
+   * Angles outside the steering position limits are rejected.
+   */
+  void set_steering(
+    const std::shared_ptr<rmw_request_id_t> request_header,
+    const std::shared_ptr<tricycle_controller_msgs::srv::SetSteering::Request> req,
+    std::shared_ptr<tricycle_controller_msgs::srv::SetSteering::Response> res);
   void clip_wheel_speed_and_steering_angle(double & wheel_speed, double & steering_angle);
   void clip_speed_for_angle(double & wheel_speed, double steering_angle);
   void clip_angle_for_speed(double & steering_angle, double wheel_speed);

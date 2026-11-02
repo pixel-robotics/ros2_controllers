@@ -78,6 +78,16 @@ public:
     return *res;
   }
 
+  /// Call the set_steering service handler directly (no executor needed).
+  tricycle_controller_msgs::srv::SetSteering::Response call_set_steering(double angle)
+  {
+    auto req = std::make_shared<tricycle_controller_msgs::srv::SetSteering::Request>();
+    req->angle = angle;
+    auto res = std::make_shared<tricycle_controller_msgs::srv::SetSteering::Response>();
+    set_steering(nullptr, req, res);
+    return *res;
+  }
+
   std::shared_ptr<geometry_msgs::msg::TwistStamped> getLastReceivedTwist()
   {
     std::shared_ptr<geometry_msgs::msg::TwistStamped> ret;
@@ -697,6 +707,35 @@ TEST_F(TestTricycleControllerSteering, collision_monitor_stop_flicker_holds_the_
   for (; t < t0 + 7.0; t += DT) step(0.0, 0.0, t);
   EXPECT_NEAR(steering_cmd(), 0.0, 1e-6);
   EXPECT_FALSE(controller_->churn_active());
+}
+
+// wfal-amr2 2026-10-30 12:27:12: after the lift-front spin the wheel stood at
+// -90 deg (zero_hold_time keeps it on a stop) and the door drive stood 3 s in
+// exact mode until it was straight. set_steering turns it straight while the
+// robot stands (marker check), without traction; the next drive releases it.
+TEST_F(TestTricycleControllerSteering, set_steering_turns_the_standing_wheel_without_traction)
+{
+  init_and_activate({rclcpp::Parameter("steering_hold.zero_hold_time", 5.0)});
+  double t = 0.0;
+  for (const double t_end = t + 2.0; t < t_end; t += DT) step(0.0, -0.11, t);  // spin: -90 deg
+  ASSERT_NEAR(steering_cmd(), -M_PI_2, 0.05);
+  for (int i = 0; i < 5; ++i, t += DT) step(0.0, 0.0, t);  // stop: the wheel is held
+
+  ASSERT_TRUE(controller_->call_set_steering(0.0).success);
+  const double t0 = t;
+  for (; t < t0 + 2.5; t += DT)  // 1.57 rad at 1 rad/s
+  {
+    step(0.0, 0.0, t);
+    EXPECT_EQ(traction_cmd(), 0.0) << "at t=" << t;
+  }
+  EXPECT_NEAR(steering_cmd(), 0.0, 1e-3);
+  EXPECT_FALSE(controller_->churn_active());
+
+  // a spin command releases the target: the spin rule applies again
+  for (const double t_end = t + 2.0; t < t_end; t += DT) step(0.0, 0.11, t);
+  EXPECT_NEAR(steering_cmd(), M_PI_2, 0.05);
+
+  EXPECT_FALSE(controller_->call_set_steering(3.0).success) << "beyond the steering limit";
 }
 
 TEST_F(TestTricycleControllerSteering, churn_monitor_ignores_demands_while_driving)
