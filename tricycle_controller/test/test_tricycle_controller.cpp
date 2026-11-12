@@ -65,6 +65,7 @@ public:
   }
 
   bool churn_active() const { return churn_active_; }
+  const tricycle_controller::Odometry & odometry() const { return odometry_; }
   void set_use_exact_mode(bool on) { use_exact_mode_ = on; }
   /// Call the set_exact_mode service handler directly (no executor needed).
   tricycle_controller_msgs::srv::SetExactMode::Response call_set_exact_mode(
@@ -775,4 +776,67 @@ TEST_F(TestTricycleControllerSteering, churn_monitor_ignores_demands_while_drivi
     step(1.0, w, t);
   }
   EXPECT_FALSE(controller_->churn_active());
+}
+
+TEST_F(TestTricycleControllerSteering, pivot_offset_defaults_leave_the_odometry_lateral_velocity_zero)
+{
+  init_and_activate();
+  traction_state_ = 10.0;  // 1 m/s
+  steering_state_ = 0.5;   // turning left
+  double t = 0.0;
+  for (int i = 0; i < 20; ++i, t += DT)
+  {
+    step(0.0, 0.0, t);
+  }
+  ASSERT_GT(controller_->odometry().getAngular(), 0.0);
+  EXPECT_EQ(controller_->odometry().getLinearY(), 0.0);
+  EXPECT_EQ(controller_->odometry().getPivotOffset(0.5), 0.0);
+}
+
+TEST_F(TestTricycleControllerSteering, pivot_offset_parameter_reaches_the_odometry)
+{
+  init_and_activate({rclcpp::Parameter("pivot_offset", 0.05)});
+  traction_state_ = 10.0;  // 1 m/s
+  steering_state_ = 0.5;   // turning left
+  double t = 0.0;
+  for (int i = 0; i < 20; ++i, t += DT)
+  {
+    step(0.0, 0.0, t);
+  }
+  const auto & odom = controller_->odometry();
+  ASSERT_GT(odom.getAngular(), 0.0);
+  EXPECT_NEAR(odom.getLinearY(), 0.05 * odom.getAngular(), 1e-12);
+}
+
+TEST_F(TestTricycleControllerSteering, pivot_offset_table_parameters_reach_the_odometry)
+{
+  init_and_activate({
+    rclcpp::Parameter("pivot_offset", 0.1),  // ignored: the table is set
+    rclcpp::Parameter("pivot_offset_table.steering_abs", std::vector<double>{0.0, 1.0}),
+    rclcpp::Parameter("pivot_offset_table.offset", std::vector<double>{0.02, 0.04}),
+  });
+  EXPECT_NEAR(controller_->odometry().getPivotOffset(0.5), 0.03, 1e-15);
+  EXPECT_NEAR(controller_->odometry().getPivotOffset(-2.0), 0.04, 1e-15);
+}
+
+TEST_F(TestTricycleController, configure_fails_for_an_inconsistent_pivot_offset_table)
+{
+  ASSERT_EQ(
+    InitController(
+      traction_joint_name, steering_joint_name,
+      {rclcpp::Parameter("pivot_offset_table.steering_abs", std::vector<double>{0.0, 1.0}),
+       rclcpp::Parameter("pivot_offset_table.offset", std::vector<double>{0.02})}),
+    controller_interface::return_type::OK);
+  EXPECT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::ERROR);
+}
+
+TEST_F(TestTricycleController, configure_fails_for_unsorted_pivot_offset_knots)
+{
+  ASSERT_EQ(
+    InitController(
+      traction_joint_name, steering_joint_name,
+      {rclcpp::Parameter("pivot_offset_table.steering_abs", std::vector<double>{1.0, 0.5}),
+       rclcpp::Parameter("pivot_offset_table.offset", std::vector<double>{0.02, 0.03})}),
+    controller_interface::return_type::OK);
+  EXPECT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::ERROR);
 }

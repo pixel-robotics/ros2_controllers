@@ -180,6 +180,8 @@ controller_interface::return_type TricycleController::update(
       odometry_message.pose.pose.orientation.w = orientation.w();
     }
     odometry_message.twist.twist.linear.x = odometry_.getLinear();
+    // Lateral motion of base_link about the pivot point (pivot_offset); 0 by default.
+    odometry_message.twist.twist.linear.y = odometry_.getLinearY();
     odometry_message.twist.twist.angular.z = odometry_.getAngular();
     realtime_odometry_publisher_->unlockAndPublish();
   }
@@ -385,7 +387,7 @@ controller_interface::return_type TricycleController::update(
     double clipped_angular_vel = (std::abs(alpha_write) > 1e-6) ?
       clipped_linear_vel * std::tan(alpha_write) / params_.wheelbase : 0.0;
 
-    odometry_.updateOpenLoop(clipped_linear_vel, clipped_angular_vel, period);
+    odometry_.updateOpenLoop(clipped_linear_vel, clipped_angular_vel, period, alpha_write);
   }
   else
   {
@@ -434,6 +436,27 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
 
   odometry_.setWheelParams(params_.wheelbase, params_.wheel_radius);
   odometry_.setVelocityRollingWindowSize(static_cast<size_t>(params_.velocity_rolling_window_size));
+  try
+  {
+    odometry_.setPivotOffset(
+      params_.pivot_offset, params_.pivot_offset_table.steering_abs,
+      params_.pivot_offset_table.offset);
+  }
+  catch (const std::invalid_argument & e)
+  {
+    RCLCPP_ERROR(logger, "Error configuring the pivot offset: %s", e.what());
+    return CallbackReturn::ERROR;
+  }
+  if (!params_.pivot_offset_table.steering_abs.empty())
+  {
+    RCLCPP_INFO(
+      logger, "Odometry pivot offset from a %zu-knot steering table (%.3f m at 0 rad)",
+      params_.pivot_offset_table.steering_abs.size(), odometry_.getPivotOffset(0.0));
+  }
+  else if (params_.pivot_offset != 0.0)
+  {
+    RCLCPP_INFO(logger, "Odometry pivot offset %.3f m behind base_link", params_.pivot_offset);
+  }
 
   cmd_vel_timeout_ = std::chrono::milliseconds{params_.cmd_vel_timeout};
   params_.publish_ackermann_command =
@@ -1021,6 +1044,11 @@ void TricycleController::publish_churn_state(bool active, const std::string & te
 
 std::tuple<double, double> TricycleController::twist_to_ackermann(double Vx, double theta_dot)
 {
+  // The pivot offset (pivot_offset / pivot_offset_table) only enters the odometry: v_y is not
+  // commandable and is never fed back here. TODO(pivot stage 2): with a steering-dependent
+  // wheelbase L(alpha) (see Odometry::yawRateWheelbase) evaluate L at the COMMANDED alpha
+  // (alpha = atan(theta_dot * L / Vx), one fixed-point step from L = wheelbase, never atan2) and
+  // replace Vx / (r * cos(alpha)) by sign(Vx) * hypot(Vx, theta_dot * L) / r.
   // using naming convention in http://users.isr.ist.utl.pt/~mir/cadeiras/robmovel/Kinematics.pdf
   double alpha, Ws;
 

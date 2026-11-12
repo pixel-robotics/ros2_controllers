@@ -92,6 +92,38 @@ tricycle_controller:
       gt<>: [0]
     }
   }
+  # Pivot point of the non-steered axle. With tandem fork rollers the point
+  # about which the robot turns (zero lateral velocity) does not lie at
+  # base_link but some centimetres behind it (measured 1.7-5 cm at Miele and
+  # Westfalia). A rigid body turning at rate w about a pivot a distance c
+  # behind base_link moves base_link sideways at v_y = c * w (both driving
+  # directions). With the default 0 the odometry is the plain tricycle model
+  # and twist.linear.y stays 0, as before. `wheelbase` stays the distance
+  # drive wheel -> pivot at zero steering and is NOT corrected by this offset.
+  pivot_offset: {
+    type: double,
+    default_value: 0.0, # m, > 0: pivot behind base_link
+    description: "Effective distance (m) of the pivot point behind base_link. Odometry adds the lateral base_link velocity twist.linear.y = pivot_offset * angular.z (same rolling mean as angular.z) and integrates the pose with it. 0 keeps the classic tricycle odometry. Overridden by pivot_offset_table when that is set. Does not change the inverse kinematics or the yaw rate.",
+  }
+  pivot_offset_table:
+    # Optional steering-dependent pivot offset c(|steering|), linearly
+    # interpolated between the knots and clamped outside them. Empty (the
+    # default) = use the constant pivot_offset. Only the lateral velocity
+    # uses it; the yaw rate keeps `wheelbase` (see the L(steering) hook in
+    # odometry.cpp: changing it needs a gyro check first).
+    steering_abs: {
+      type: double_array,
+      default_value: [],
+      description: "Knots of |steering angle| (rad), strictly increasing, same length as offset. Empty disables the table.",
+      validation: {
+        lower_element_bounds<>: [0.0]
+      }
+    }
+    offset: {
+      type: double_array,
+      default_value: [],
+      description: "Pivot offset (m, > 0: behind base_link) at each steering_abs knot.",
+    }
   traction:
     # "The positive limit will be applied to both directions. Setting different limits for positive "
     # "and negative directions is not supported. Actuators are "

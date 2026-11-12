@@ -95,6 +95,12 @@ if(BUILD_TESTING)
   target_link_libraries(test_traction_limiter
     tricycle_controller
   )
+
+  ament_add_gmock(test_odometry
+    test/test_odometry.cpp)
+  target_link_libraries(test_odometry
+    tricycle_controller
+  )
 endif()
 
 install(
