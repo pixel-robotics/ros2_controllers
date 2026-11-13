@@ -33,6 +33,8 @@ Odometry::Odometry(size_t velocity_rolling_window_size)
   wheelbase_(0.0),
   wheel_radius_(0.0),
   pivot_offset_(0.0),
+  pivot_offset_full_steer_(0.0),
+  steering_deadband_(0.0),
   velocity_rolling_window_size_(velocity_rolling_window_size),
   linear_accumulator_(velocity_rolling_window_size),
   linear_y_accumulator_(velocity_rolling_window_size),
@@ -42,14 +44,8 @@ Odometry::Odometry(size_t velocity_rolling_window_size)
 
 bool Odometry::update(double Ws, double alpha, const rclcpp::Duration & dt)
 {
-  // using naming convention in http://users.isr.ist.utl.pt/~mir/cadeiras/robmovel/Kinematics.pdf
-  double Vs = Ws * wheel_radius_;
-  double Vx = Vs * std::cos(alpha);
-  double theta_dot = Vs * std::sin(alpha) / yawRateWheelbase(alpha);
-  // base_link sits pivot_offset in front of the point the robot turns about, so it moves sideways
-  // at c * theta_dot, in both driving directions. An offset of 0 gives an exact 0.0 (not -0.0).
-  const double c = getPivotOffset(alpha);
-  const double Vy = (c != 0.0) ? c * theta_dot : 0.0;
+  double Vx, Vy, theta_dot;
+  wheelToTwist(Ws, alpha, Vx, Vy, theta_dot);
 
   // Integrate odometry:
   integrateExact(Vx * dt.seconds(), Vy * dt.seconds(), theta_dot * dt.seconds());
@@ -66,10 +62,26 @@ bool Odometry::update(double Ws, double alpha, const rclcpp::Duration & dt)
   return true;
 }
 
+void Odometry::wheelToTwist(
+  double Ws, double alpha, double & linear, double & lateral, double & angular) const
+{
+  // using naming convention in http://users.isr.ist.utl.pt/~mir/cadeiras/robmovel/Kinematics.pdf
+  // The wheel turns by the true angle delta_t (measured minus the deadband); the robot turns about
+  // the pivot c(delta_t) behind base_link, i.e. at the arm L = wheelbase + c from the drive wheel.
+  const double Vs = Ws * wheel_radius_;
+  const double delta = trueSteering(alpha);
+  const double c = getPivotOffset(delta);
+  linear = Vs * std::cos(delta);
+  angular = Vs * std::sin(delta) / yawRateWheelbase(delta);
+  // base_link sits c in front of the point the robot turns about, so it moves sideways at
+  // c * angular, in both driving directions. An offset of 0 gives an exact 0.0 (not -0.0).
+  lateral = (c != 0.0) ? c * angular : 0.0;
+}
+
 void Odometry::updateOpenLoop(
   double linear, double angular, const rclcpp::Duration & dt, double steering)
 {
-  const double c = getPivotOffset(steering);
+  const double c = getPivotOffset(trueSteering(steering));
 
   /// Save last linear and angular velocity:
   linear_ = linear;
@@ -94,71 +106,52 @@ void Odometry::setWheelParams(double wheelbase, double wheel_radius)
   wheel_radius_ = wheel_radius;
 }
 
-void Odometry::setPivotOffset(
-  double pivot_offset, const std::vector<double> & steering_abs, const std::vector<double> & offset)
+void Odometry::setPivotOffset(double pivot_offset, double pivot_offset_full_steer)
 {
-  if (!std::isfinite(pivot_offset))
+  if (!std::isfinite(pivot_offset) || !std::isfinite(pivot_offset_full_steer))
   {
-    throw std::invalid_argument("pivot_offset must be finite");
-  }
-  if (steering_abs.size() != offset.size())
-  {
-    throw std::invalid_argument(
-      "pivot_offset_table: steering_abs and offset must have the same length");
-  }
-  for (size_t i = 0; i < steering_abs.size(); ++i)
-  {
-    if (!std::isfinite(steering_abs[i]) || !std::isfinite(offset[i]) || steering_abs[i] < 0.0)
-    {
-      throw std::invalid_argument(
-        "pivot_offset_table: knots must be finite and steering_abs >= 0");
-    }
-    if (i > 0 && !(steering_abs[i] > steering_abs[i - 1]))
-    {
-      throw std::invalid_argument("pivot_offset_table: steering_abs must be strictly increasing");
-    }
+    throw std::invalid_argument("pivot_offset and pivot_offset_full_steer must be finite");
   }
   pivot_offset_ = pivot_offset;
-  pivot_table_steering_abs_ = steering_abs;
-  pivot_table_offset_ = offset;
+  pivot_offset_full_steer_ = pivot_offset_full_steer;
 }
 
-double Odometry::getPivotOffset(double steering) const
+void Odometry::setSteeringDeadband(double steering_deadband)
 {
-  const auto & knots = pivot_table_steering_abs_;
-  const auto & values = pivot_table_offset_;
-  if (knots.empty())
+  if (!std::isfinite(steering_deadband) || steering_deadband < 0.0)
+  {
+    throw std::invalid_argument("steering_deadband must be finite and >= 0");
+  }
+  steering_deadband_ = steering_deadband;
+}
+
+double Odometry::trueSteering(double steering) const
+{
+  if (steering_deadband_ == 0.0)
+  {
+    return steering;  // bit for bit the measured angle
+  }
+  return std::copysign(std::max(std::abs(steering) - steering_deadband_, 0.0), steering);
+}
+
+double Odometry::getPivotOffset(double steering_true) const
+{
+  if (pivot_offset_full_steer_ == 0.0)
   {
     return pivot_offset_;
   }
-  const double a = std::abs(steering);
-  if (a <= knots.front())
-  {
-    return values.front();
-  }
-  if (!(a < knots.back()))  // also catches NaN
-  {
-    return values.back();
-  }
-  // knots.front() < a < knots.back(): i in [1, size - 1]
-  const size_t i =
-    static_cast<size_t>(std::upper_bound(knots.begin(), knots.end(), a) - knots.begin());
-  const double t = (a - knots[i - 1]) / (knots[i] - knots[i - 1]);
-  return values[i - 1] + t * (values[i] - values[i - 1]);
+  const double s = std::sin(steering_true);
+  return pivot_offset_ + pivot_offset_full_steer_ * s * s;
 }
 
-double Odometry::yawRateWheelbase(double /*alpha*/) const
+double Odometry::yawRateWheelbase(double steering_true) const
 {
-  // HOOK (pivot model stage 2, disabled): steering-dependent yaw-rate wheelbase
-  //   L(alpha) = wheelbase + c1 * s(alpha),  s(0) = 0, s(pi/2) = 1 (or a monotone knot table),
-  // i.e. the drive wheel -> pivot distance grows by the same c1 by which the pivot offset grows
-  // with |steering|. `wheelbase` is already drive wheel -> pivot at zero steering, so the constant
-  // pivot_offset must never be added here (double counting).
-  // TODO(pivot stage 2): enable only after the gyro check of the design review: with
-  // pivot_offset ~5 cm at a spin and wheelbase 1.266, Westfalia spins must over-rotate ~2.8 % vs
-  // the gyro. If they do not, the spin offset is a camera/marker artefact and c1 stays out of L.
-  // When enabled, the inverse kinematics must use L at the COMMANDED steering angle as well.
-  return wheelbase_;
+  // Pivot model (stage 2): `wheelbase` is the physical drive wheel -> base_link distance (CAD);
+  // the robot turns about the pivot c(delta) behind base_link, so the arm of the yaw rate is
+  // wheelbase + c(delta). With c = 0 this is exactly `wheelbase` (x + 0.0 == x bit for bit).
+  // Do not configure a site wheelbase that already contains the mean pivot together with c
+  // (double counting): the site wheelbases 1.266-1.28 were the average of this L(delta).
+  return wheelbase_ + getPivotOffset(steering_true);
 }
 
 void Odometry::setVelocityRollingWindowSize(size_t velocity_rolling_window_size)

@@ -19,9 +19,12 @@
 #include <gmock/gmock.h>
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -66,6 +69,11 @@ public:
 
   bool churn_active() const { return churn_active_; }
   const tricycle_controller::Odometry & odometry() const { return odometry_; }
+  /// The inverse kinematics (cmd_vel -> steering angle, traction wheel speed).
+  std::tuple<double, double> inverse(double linear, double angular)
+  {
+    return twist_to_ackermann(linear, angular);
+  }
   void set_use_exact_mode(bool on) { use_exact_mode_ = on; }
   /// Call the set_exact_mode service handler directly (no executor needed).
   tricycle_controller_msgs::srv::SetExactMode::Response call_set_exact_mode(
@@ -806,37 +814,287 @@ TEST_F(TestTricycleControllerSteering, pivot_offset_parameter_reaches_the_odomet
   const auto & odom = controller_->odometry();
   ASSERT_GT(odom.getAngular(), 0.0);
   EXPECT_NEAR(odom.getLinearY(), 0.05 * odom.getAngular(), 1e-12);
+  // the robot turns about the pivot: arm wheelbase + c = 1.05
+  EXPECT_NEAR(odom.getAngular(), 1.0 * std::sin(0.5) / 1.05, 1e-12);
 }
 
-TEST_F(TestTricycleControllerSteering, pivot_offset_table_parameters_reach_the_odometry)
+TEST_F(TestTricycleControllerSteering, pivot_model_parameters_reach_the_odometry)
 {
   init_and_activate({
-    rclcpp::Parameter("pivot_offset", 0.1),  // ignored: the table is set
-    rclcpp::Parameter("pivot_offset_table.steering_abs", std::vector<double>{0.0, 1.0}),
-    rclcpp::Parameter("pivot_offset_table.offset", std::vector<double>{0.02, 0.04}),
+    rclcpp::Parameter("pivot_offset", 0.01),
+    rclcpp::Parameter("pivot_offset_full_steer", 0.03),
+    rclcpp::Parameter("steering_deadband", 0.006),
   });
-  EXPECT_NEAR(controller_->odometry().getPivotOffset(0.5), 0.03, 1e-15);
-  EXPECT_NEAR(controller_->odometry().getPivotOffset(-2.0), 0.04, 1e-15);
+  const auto & odom = controller_->odometry();
+  ASSERT_TRUE(odom.hasPivotModel());
+  EXPECT_NEAR(odom.trueSteering(0.5), 0.494, 1e-15);
+  EXPECT_NEAR(odom.trueSteering(-0.004), 0.0, 0.0);
+  EXPECT_NEAR(odom.getPivotOffset(M_PI_2), 0.04, 1e-15);
+  EXPECT_NEAR(odom.yawRateWheelbase(M_PI_2), 1.04, 1e-15);
+  EXPECT_NEAR(odom.yawRateWheelbase(0.0), 1.01, 1e-15);
 }
 
-TEST_F(TestTricycleController, configure_fails_for_an_inconsistent_pivot_offset_table)
+TEST_F(TestTricycleController, configure_fails_for_a_negative_steering_deadband)
+{
+  // rejected by the parameter validation (init) or at the latest by configure
+  if (
+    InitController(
+      traction_joint_name, steering_joint_name,
+      {rclcpp::Parameter("steering_deadband", -0.01)}) == controller_interface::return_type::OK)
+  {
+    EXPECT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::ERROR);
+  }
+}
+
+TEST_F(TestTricycleController, configure_fails_for_a_non_positive_pivot_arm)
 {
   ASSERT_EQ(
     InitController(
-      traction_joint_name, steering_joint_name,
-      {rclcpp::Parameter("pivot_offset_table.steering_abs", std::vector<double>{0.0, 1.0}),
-       rclcpp::Parameter("pivot_offset_table.offset", std::vector<double>{0.02})}),
+      traction_joint_name, steering_joint_name, {rclcpp::Parameter("pivot_offset", -1.0)}),
     controller_interface::return_type::OK);
   EXPECT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::ERROR);
 }
 
-TEST_F(TestTricycleController, configure_fails_for_unsorted_pivot_offset_knots)
+// --- inverse kinematics with the pivot model ---------------------------------------------------------
+
+namespace
 {
-  ASSERT_EQ(
-    InitController(
-      traction_joint_name, steering_joint_name,
-      {rclcpp::Parameter("pivot_offset_table.steering_abs", std::vector<double>{1.0, 0.5}),
-       rclcpp::Parameter("pivot_offset_table.offset", std::vector<double>{0.02, 0.03})}),
-    controller_interface::return_type::OK);
-  EXPECT_EQ(controller_->on_configure(rclcpp_lifecycle::State()), CallbackReturn::ERROR);
+/// twist_to_ackermann before the pivot model (b44c73e / 037e0cb), copied verbatim.
+std::tuple<double, double> legacy_twist_to_ackermann(
+  double Vx, double theta_dot, double wheelbase, double wheel_radius)
+{
+  double alpha, Ws;
+  if (Vx == 0 && theta_dot != 0)
+  {  // is spin action
+    alpha = theta_dot > 0 ? M_PI_2 : -M_PI_2;
+    Ws = std::abs(theta_dot) * wheelbase / wheel_radius;
+    return std::make_tuple(alpha, Ws);
+  }
+  alpha = (theta_dot == 0 || Vx == 0) ? 0 : std::atan(theta_dot * wheelbase / Vx);
+  Ws = Vx / (wheel_radius * std::cos(alpha));
+  return std::make_tuple(alpha, Ws);
+}
+
+uint64_t bits(double v)
+{
+  uint64_t b;
+  std::memcpy(&b, &v, sizeof(b));
+  return b;
+}
+
+std::vector<double> grid(double lo, double hi, int n)
+{
+  std::vector<double> out;
+  for (int i = 0; i <= n; ++i)
+  {
+    out.push_back(lo + (hi - lo) * i / n);
+  }
+  return out;
+}
+
+constexpr double WB = 1.0;  // fixture wheelbase
+constexpr double R = 0.1;   // fixture wheel_radius
+}  // namespace
+
+TEST_F(TestTricycleControllerSteering, default_inverse_kinematics_is_bit_identical_to_the_previous)
+{
+  init_and_activate();
+  ASSERT_FALSE(controller_->odometry().hasPivotModel());
+  auto vs = grid(-1.5, 1.5, 30);
+  auto ws = grid(-1.0, 1.0, 20);
+  vs.insert(vs.end(), {0.0, -0.0, 1e-9, -1e-9});
+  ws.insert(ws.end(), {0.0, -0.0, 1e-9});
+  for (double v : vs)
+  {
+    for (double w : ws)
+    {
+      const auto [alpha, Ws] = controller_->inverse(v, w);
+      const auto [alpha_ref, Ws_ref] = legacy_twist_to_ackermann(v, w, WB, R);
+      ASSERT_EQ(bits(alpha), bits(alpha_ref)) << v << " " << w;
+      ASSERT_EQ(bits(Ws), bits(Ws_ref)) << v << " " << w;
+    }
+  }
+}
+
+TEST_F(TestTricycleControllerSteering, inverse_round_trip_with_pivot_model_in_all_quadrants)
+{
+  constexpr double c0 = 0.01, c1 = 0.04;
+  init_and_activate({
+    rclcpp::Parameter("pivot_offset", c0),
+    rclcpp::Parameter("pivot_offset_full_steer", c1),
+  });
+  const auto & odom = controller_->odometry();
+  int checked = 0;
+  for (double v : grid(-1.5, 1.5, 60))
+  {
+    for (double w : grid(-1.0, 1.0, 40))
+    {
+      const auto [alpha, Ws] = controller_->inverse(v, w);
+      ASSERT_LE(std::abs(alpha), M_PI_2) << v << " " << w;  // atan, also in reverse
+      double vx, vy, wz;
+      odom.wheelToTwist(Ws, alpha, vx, vy, wz);
+      // one fixed-point step: residual ~ (c1 / 2L) * |delta1 - delta0|, < 5e-4 here
+      EXPECT_NEAR(vx, v, 5e-4) << v << " " << w;
+      EXPECT_NEAR(wz, w, 5e-4) << v << " " << w;
+      // the driving direction follows v (reverse drives the wheel backwards)
+      if (v != 0.0)
+      {
+        EXPECT_EQ(std::signbit(Ws), std::signbit(v)) << v << " " << w;
+      }
+      const double s = std::sin(alpha);
+      EXPECT_NEAR(vy, (c0 + c1 * s * s) * wz, 1e-15);
+      ++checked;
+    }
+  }
+  EXPECT_EQ(checked, 61 * 41);
+}
+
+TEST_F(TestTricycleControllerSteering, inverse_with_constant_pivot_is_exact)
+{
+  // c1 = 0: L is constant, the fixed-point step is exact
+  init_and_activate({rclcpp::Parameter("pivot_offset", 0.03)});
+  const auto & odom = controller_->odometry();
+  for (double v : grid(-1.5, 1.5, 12))
+  {
+    for (double w : grid(-1.0, 1.0, 8))
+    {
+      const auto [alpha, Ws] = controller_->inverse(v, w);
+      double vx, vy, wz;
+      odom.wheelToTwist(Ws, alpha, vx, vy, wz);
+      EXPECT_NEAR(vx, v, 1e-12);
+      EXPECT_NEAR(wz, w, 1e-12);
+      // same steering as the classic model with wheelbase + c
+      if (v != 0.0)
+      {
+        EXPECT_NEAR(alpha, std::get<0>(legacy_twist_to_ackermann(v, w, WB + 0.03, R)), 1e-12);
+      }
+    }
+  }
+}
+
+TEST_F(TestTricycleControllerSteering, inverse_spin_drives_the_arm_at_full_steer)
+{
+  constexpr double c0 = 0.01, c1 = 0.04;
+  init_and_activate({
+    rclcpp::Parameter("pivot_offset", c0),
+    rclcpp::Parameter("pivot_offset_full_steer", c1),
+  });
+  const auto & odom = controller_->odometry();
+  for (double w : {0.3, -0.3, 1e-3})
+  {
+    const auto [alpha, Ws] = controller_->inverse(0.0, w);
+    EXPECT_EQ(alpha, std::copysign(M_PI_2, w));
+    EXPECT_NEAR(Ws, std::abs(w) * (WB + c0 + c1) / R, 1e-12);
+    double vx, vy, wz;
+    odom.wheelToTwist(Ws, alpha, vx, vy, wz);
+    EXPECT_NEAR(wz, w, 1e-12);
+    EXPECT_NEAR(vx, 0.0, 1e-15);
+    // keep_wheel_side's flip (wheel on the other lock, traction reversed) is the same motion
+    odom.wheelToTwist(-Ws, -alpha, vx, vy, wz);
+    EXPECT_NEAR(wz, w, 1e-12);
+    EXPECT_NEAR(vy, (c0 + c1) * w, 1e-12);
+  }
+  const auto [alpha0, Ws0] = controller_->inverse(0.0, 0.0);
+  EXPECT_EQ(alpha0, 0.0);
+  EXPECT_EQ(Ws0, 0.0);
+}
+
+TEST_F(TestTricycleControllerSteering, inverse_is_continuous_as_v_goes_to_zero)
+{
+  constexpr double c0 = 0.01, c1 = 0.04;
+  init_and_activate({
+    rclcpp::Parameter("pivot_offset", c0),
+    rclcpp::Parameter("pivot_offset_full_steer", c1),
+  });
+  const auto & odom = controller_->odometry();
+  for (double w : {0.3, -0.3})
+  {
+    const auto [alpha_spin, Ws_spin] = controller_->inverse(0.0, w);
+    for (double eps : {1e-3, 1e-6, 1e-9})
+    {
+      // v -> 0+: converges to the spin command
+      const auto [alpha_p, Ws_p] = controller_->inverse(eps, w);
+      EXPECT_NEAR(alpha_p, alpha_spin, 2.0 * eps / (std::abs(w) * WB)) << eps;
+      EXPECT_NEAR(Ws_p, Ws_spin, 1e-3 * Ws_spin + eps / R) << eps;
+      // v -> 0-: converges to the keep_wheel_side form of the spin (other lock, reversed)
+      const auto [alpha_m, Ws_m] = controller_->inverse(-eps, w);
+      EXPECT_NEAR(alpha_m, -alpha_spin, 2.0 * eps / (std::abs(w) * WB)) << eps;
+      EXPECT_NEAR(Ws_m, -Ws_spin, 1e-3 * Ws_spin + eps / R) << eps;
+      // both are the same motion
+      double vx_p, vy_p, w_p, vx_m, vy_m, w_m;
+      odom.wheelToTwist(Ws_p, alpha_p, vx_p, vy_p, w_p);
+      odom.wheelToTwist(Ws_m, alpha_m, vx_m, vy_m, w_m);
+      EXPECT_NEAR(w_p, w, 5e-4);
+      EXPECT_NEAR(w_m, w, 5e-4);
+      EXPECT_NEAR(vx_p, eps, 1e-9);
+      EXPECT_NEAR(vx_m, -eps, 1e-9);
+    }
+  }
+}
+
+TEST_F(TestTricycleControllerSteering, inverse_does_not_compensate_the_steering_deadband)
+{
+  // A deadband alone switches to the pivot code path but must not change the command: +-b at
+  // delta ~ 0 would make the steering jump by 2b on every sign change (chatter).
+  init_and_activate({rclcpp::Parameter("steering_deadband", 0.006)});
+  ASSERT_TRUE(controller_->odometry().hasPivotModel());
+  for (double v : grid(-1.5, 1.5, 12))
+  {
+    for (double w : grid(-1.0, 1.0, 8))
+    {
+      const auto [alpha, Ws] = controller_->inverse(v, w);
+      const auto [alpha_ref, Ws_ref] = legacy_twist_to_ackermann(v, w, WB, R);
+      EXPECT_NEAR(alpha, alpha_ref, 1e-12) << v << " " << w;
+      EXPECT_NEAR(Ws, Ws_ref, 1e-12) << v << " " << w;
+    }
+  }
+  // tiny heading corrections give tiny steering angles of either sign, no jump to +-b
+  EXPECT_NEAR(std::get<0>(controller_->inverse(1.0, 1e-4)), 1e-4, 1e-9);
+  EXPECT_NEAR(std::get<0>(controller_->inverse(1.0, -1e-4)), -1e-4, 1e-9);
+}
+
+TEST_F(TestTricycleControllerSteering, keep_wheel_side_spin_with_pivot_model)
+{
+  constexpr double c0 = 0.01, c1 = 0.04;
+  init_and_activate({
+    rclcpp::Parameter("pivot_offset", c0),
+    rclcpp::Parameter("pivot_offset_full_steer", c1),
+  });
+  double t = 0.0;
+  for (const double t_end = t + 2.0; t < t_end; t += DT) step(0.0, -0.11, t);  // -90 deg
+  ASSERT_NEAR(steering_cmd(), -M_PI_2, 0.05);
+
+  ASSERT_TRUE(controller_->call_set_exact_mode(true, 0.08, true).success);
+  steering_state_ = -M_PI_2;  // wheel at the lock: exact mode releases traction
+  for (const double t_end = t + 1.0; t < t_end; t += DT) step(0.0, 0.11, t);  // turn left
+  EXPECT_NEAR(steering_cmd(), -M_PI_2, 1e-6) << "swung the wheel to the other lock";
+  // reversed traction driving the arm L(pi/2) = wheelbase + c0 + c1
+  EXPECT_NEAR(traction_cmd(), -0.11 * (WB + c0 + c1) / R, 1e-6);
+}
+
+TEST_F(TestTricycleControllerSteering, open_loop_odometry_uses_the_pivot_model)
+{
+  constexpr double c0 = 0.0, c1 = 0.04, b = 0.006;
+  init_and_activate({
+    rclcpp::Parameter("open_loop", true),
+    rclcpp::Parameter("pivot_offset", c0),
+    rclcpp::Parameter("pivot_offset_full_steer", c1),
+    rclcpp::Parameter("steering_deadband", b),
+  });
+  double t = 0.0;
+  for (const double t_end = t + 3.0; t < t_end; t += DT) step(0.5, 0.4, t);
+  const auto & odom = controller_->odometry();
+  double vx, vy, wz;
+  odom.wheelToTwist(traction_cmd(), steering_cmd(), vx, vy, wz);
+  EXPECT_NEAR(odom.getAngular(), wz, 1e-9);
+  EXPECT_NEAR(odom.getLinear(), vx, 1e-9);
+  EXPECT_NEAR(odom.getLinearY(), vy, 1e-9);
+  const double delta_t = steering_cmd() - b;
+  EXPECT_NEAR(vy, c1 * std::sin(delta_t) * std::sin(delta_t) * wz, 1e-12);
+  // the uncompensated deadband: the wheel's true angle is the command minus b
+  const double v_d = traction_cmd() * R;
+  const double s = std::sin(delta_t);
+  EXPECT_NEAR(wz, v_d * s / (WB + c1 * s * s), 1e-12);
+  const double s_cmd = std::sin(steering_cmd());
+  EXPECT_LT(wz, v_d * s_cmd / (WB + c1 * s_cmd * s_cmd));
 }

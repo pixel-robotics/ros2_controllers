@@ -20,7 +20,6 @@
 #define TRICYCLE_CONTROLLER__ODOMETRY_HPP_
 
 #include <cmath>
-#include <vector>
 
 #include <rclcpp/duration.hpp>
 // \note The versions conditioning is added here to support the source-compatibility with Humble
@@ -49,7 +48,7 @@ public:
   double getY() const { return y_; }
   double getHeading() const { return heading_; }
   double getLinear() const { return linear_; }
-  /// Lateral velocity of base_link (m/s), pivot_offset * angular; 0 with the default pivot offset.
+  /// Lateral velocity of base_link (m/s), c * angular; 0 with the default pivot offset.
   double getLinearY() const { return linear_y_; }
   double getAngular() const { return angular_; }
 
@@ -57,21 +56,45 @@ public:
   void setVelocityRollingWindowSize(size_t velocity_rolling_window_size);
 
   /**
-   * \brief Pivot point of the non-steered axle, \p pivot_offset metres behind base_link.
+   * \brief Pivot point of the non-steered axle, c(delta) metres behind base_link.
    *
-   * The robot turns about the pivot (zero lateral velocity there), so base_link moves sideways at
-   * v_y = c * angular. With \p steering_abs / \p offset non-empty, c = c(|steering|) is linearly
-   * interpolated between the knots (clamped outside) and replaces the constant. Empty table and
-   * offset 0 (the defaults) give the classic tricycle odometry bit for bit.
+   * c(delta) = pivot_offset + pivot_offset_full_steer * sin^2(delta_t), delta_t the true steering
+   * angle (see trueSteering()). The robot turns about the pivot (zero lateral velocity there), so
+   * base_link moves sideways at v_y = c * angular, and the drive wheel -> pivot distance that sets
+   * the yaw rate is wheelbase + c (see yawRateWheelbase()). Both 0 (the defaults) give the classic
+   * tricycle odometry bit for bit.
    *
-   * \throws std::invalid_argument if the table sizes differ or steering_abs is not strictly
-   *         increasing.
+   * \throws std::invalid_argument if a value is not finite.
    */
-  void setPivotOffset(
-    double pivot_offset, const std::vector<double> & steering_abs = {},
-    const std::vector<double> & offset = {});
-  /// Pivot offset c (m) used for the lateral velocity at steering angle \p steering (rad).
-  double getPivotOffset(double steering) const;
+  void setPivotOffset(double pivot_offset, double pivot_offset_full_steer = 0.0);
+  /**
+   * \brief Symmetric steering deadband \p steering_deadband (rad, >= 0): the wheel turns
+   * |delta| - b less than measured, delta_t = sign(delta) * max(|delta| - b, 0). 0 (the default)
+   * leaves the measured angle untouched. Odometry only; the inverse kinematics does not compensate
+   * it (see TricycleController::twist_to_ackermann).
+   *
+   * \throws std::invalid_argument if negative or not finite.
+   */
+  void setSteeringDeadband(double steering_deadband);
+
+  /// True steering angle delta_t (rad) for a measured (or commanded) angle \p steering.
+  double trueSteering(double steering) const;
+  /// Pivot offset c (m) behind base_link at the TRUE steering angle \p steering_true (rad).
+  double getPivotOffset(double steering_true) const;
+  /// Yaw-rate wheelbase L = wheelbase + c(steering_true) (m), drive wheel -> pivot.
+  double yawRateWheelbase(double steering_true) const;
+  /// False when deadband, pivot_offset and pivot_offset_full_steer are all 0 (classic model).
+  bool hasPivotModel() const
+  {
+    return steering_deadband_ != 0.0 || pivot_offset_ != 0.0 || pivot_offset_full_steer_ != 0.0;
+  }
+  /**
+   * \brief Body velocities of base_link for traction wheel speed \p Ws (rad/s) at measured or
+   * commanded steering \p alpha (rad): v_d = r * Ws, delta_t = trueSteering(alpha),
+   * linear = v_d cos(delta_t), angular = v_d sin(delta_t) / L, lateral = c * angular.
+   */
+  void wheelToTwist(
+    double Ws, double alpha, double & linear, double & lateral, double & angular) const;
 
 private:
 // \note The versions conditioning is added here to support the source-compatibility with Humble
@@ -83,8 +106,6 @@ private:
 
   void integrateRungeKutta2(double linear, double lateral, double angular);
   void integrateExact(double linear, double lateral, double angular);
-  /// Wheelbase for the yaw rate at steering angle \p alpha. Stage-1 hook, see odometry.cpp.
-  double yawRateWheelbase(double alpha) const;
   void resetAccumulators();
 
   // Current pose:
@@ -101,10 +122,11 @@ private:
   double wheelbase_;
   double wheel_radius_;
 
-  // Pivot point behind base_link [m]: constant, or c(|steering|) table when non-empty.
+  // Pivot point behind base_link [m]: c = pivot_offset_ + pivot_offset_full_steer_ * sin^2.
   double pivot_offset_;
-  std::vector<double> pivot_table_steering_abs_;
-  std::vector<double> pivot_table_offset_;
+  double pivot_offset_full_steer_;
+  // Symmetric steering deadband [rad]
+  double steering_deadband_;
 
   // Rolling mean accumulators for the linear and angular velocities:
   size_t velocity_rolling_window_size_;

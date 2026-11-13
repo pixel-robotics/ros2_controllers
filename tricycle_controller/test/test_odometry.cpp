@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Pivot-point odometry (pivot_offset / pivot_offset_table). The robot turns about a pivot point
-// c behind base_link (tandem fork rollers), so base_link moves sideways at v_y = c * w.
+// Pivot-point odometry (model A): steering deadband b, pivot c(delta) = c0 + c1 * sin^2(delta_t)
+// behind base_link (tandem fork rollers). The robot turns about the pivot: w = v_d sin(delta_t) / L
+// with L = wheelbase + c, and base_link moves sideways at v_y = c * w.
 
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -30,7 +32,7 @@ using tricycle_controller::Odometry;
 
 namespace
 {
-constexpr double WHEELBASE = 1.266;
+constexpr double WHEELBASE = 1.2526;  // CAD
 constexpr double WHEEL_RADIUS = 0.125;
 constexpr size_t WINDOW = 10;
 
@@ -108,12 +110,13 @@ private:
 };
 
 Odometry make_odometry(
-  double pivot_offset = 0.0, const std::vector<double> & steering_abs = {},
-  const std::vector<double> & offset = {})
+  double pivot_offset = 0.0, double pivot_offset_full_steer = 0.0, double steering_deadband = 0.0,
+  double wheelbase = WHEELBASE)
 {
   Odometry odom(WINDOW);
-  odom.setWheelParams(WHEELBASE, WHEEL_RADIUS);
-  odom.setPivotOffset(pivot_offset, steering_abs, offset);
+  odom.setWheelParams(wheelbase, WHEEL_RADIUS);
+  odom.setPivotOffset(pivot_offset, pivot_offset_full_steer);
+  odom.setSteeringDeadband(steering_deadband);
   return odom;
 }
 
@@ -152,14 +155,16 @@ std::vector<std::tuple<double, double, double>> mixed_inputs()
 }
 }  // namespace
 
-// --- defaults: bit-identical to the odometry before the pivot offset ----------------------------
+// --- defaults: bit-identical to the odometry before the pivot model ------------------------------
 
 TEST(PivotOdometryTest, default_odometry_is_bit_identical_to_the_previous_model)
 {
-  Odometry odom(WINDOW);  // no setPivotOffset at all: constructor defaults
+  Odometry odom(WINDOW);  // no setPivotOffset / setSteeringDeadband at all: constructor defaults
   odom.setWheelParams(WHEELBASE, WHEEL_RADIUS);
-  Odometry odom_zero = make_odometry(0.0);  // explicit pivot_offset 0, empty table
+  Odometry odom_zero = make_odometry(0.0, 0.0, 0.0);  // explicit zeros
   LegacyOdometry legacy(WHEELBASE, WHEEL_RADIUS, WINDOW);
+  ASSERT_FALSE(odom.hasPivotModel());
+  ASSERT_FALSE(odom_zero.hasPivotModel());
 
   for (const auto & [Ws, alpha, dt_s] : mixed_inputs())
   {
@@ -184,7 +189,7 @@ TEST(PivotOdometryTest, default_odometry_is_bit_identical_to_the_previous_model)
 
 TEST(PivotOdometryTest, default_open_loop_odometry_is_bit_identical_to_the_previous_model)
 {
-  Odometry odom = make_odometry(0.0);
+  Odometry odom = make_odometry();
   LegacyOdometry legacy(WHEELBASE, WHEEL_RADIUS, WINDOW);
   for (const auto & [Ws, alpha, dt_s] : mixed_inputs())
   {
@@ -200,7 +205,115 @@ TEST(PivotOdometryTest, default_open_loop_odometry_is_bit_identical_to_the_previ
   }
 }
 
-// --- lateral velocity ----------------------------------------------------------------------------
+TEST(PivotOdometryTest, default_model_helpers_are_the_identity)
+{
+  const Odometry odom = make_odometry();
+  for (double a : {0.0, -0.0, 1e-9, -0.3, 1.2, M_PI_2, -M_PI_2})
+  {
+    EXPECT_EQ(bits(odom.trueSteering(a)), bits(a));
+    EXPECT_EQ(bits(odom.yawRateWheelbase(a)), bits(WHEELBASE));
+    EXPECT_EQ(bits(odom.getPivotOffset(a)), bits(0.0));
+  }
+}
+
+// --- steering deadband ---------------------------------------------------------------------------
+
+TEST(PivotOdometryTest, deadband_true_steering_is_symmetric_and_clamped_at_zero)
+{
+  constexpr double b = 0.006;
+  const Odometry odom = make_odometry(0.0, 0.0, b);
+  EXPECT_EQ(odom.trueSteering(0.0), 0.0);
+  EXPECT_EQ(odom.trueSteering(0.004), 0.0);
+  EXPECT_EQ(odom.trueSteering(-0.004), 0.0);
+  EXPECT_EQ(odom.trueSteering(b), 0.0);
+  EXPECT_NEAR(odom.trueSteering(0.5), 0.5 - b, 1e-15);
+  EXPECT_NEAR(odom.trueSteering(-0.5), -0.5 + b, 1e-15);
+  EXPECT_NEAR(odom.trueSteering(M_PI_2), M_PI_2 - b, 1e-15);
+}
+
+TEST(PivotOdometryTest, steering_inside_the_deadband_drives_straight)
+{
+  constexpr double b = 0.0066;  // 0.38 deg
+  for (const double alpha : {0.0065, -0.0065, 0.003, -0.001})
+  {
+    for (const double Ws : {8.0, -6.0})
+    {
+      Odometry odom = make_odometry(0.01, 0.03, b);
+      drive(odom, Ws, alpha, 100);
+      EXPECT_EQ(odom.getAngular(), 0.0) << alpha << " " << Ws;
+      EXPECT_EQ(odom.getLinearY(), 0.0) << alpha << " " << Ws;
+      EXPECT_EQ(odom.getHeading(), 0.0) << alpha << " " << Ws;
+      EXPECT_EQ(odom.getY(), 0.0) << alpha << " " << Ws;
+      EXPECT_NEAR(odom.getLinear(), Ws * WHEEL_RADIUS, 1e-12);  // the full wheel speed
+      EXPECT_NEAR(odom.getX(), 100 * 0.02 * Ws * WHEEL_RADIUS, 1e-9);
+    }
+  }
+}
+
+TEST(PivotOdometryTest, yaw_rate_follows_the_steering_minus_the_deadband)
+{
+  constexpr double b = 0.0089;  // 0.51 deg
+  const Odometry odom = make_odometry(0.0, 0.0, b);
+  for (const double alpha : {0.02, -0.02, 0.1, -0.4, 1.0, -M_PI_2})
+  {
+    for (const double Ws : {8.0, -3.0})
+    {
+      double vx, vy, w;
+      odom.wheelToTwist(Ws, alpha, vx, vy, w);
+      const double v_d = Ws * WHEEL_RADIUS;
+      const double expected = v_d * std::copysign(std::sin(std::abs(alpha) - b), alpha) / WHEELBASE;
+      EXPECT_NEAR(w, expected, 1e-14) << alpha << " " << Ws;
+      EXPECT_NEAR(vx, v_d * std::cos(std::abs(alpha) - b), 1e-14);
+      EXPECT_EQ(vy, 0.0);
+    }
+  }
+  // the small-angle signature the fit found: L_eff = L * sin(delta) / sin(delta - b) ~ cot(delta)
+  double vx, vy, w;
+  odom.wheelToTwist(8.0, 0.2, vx, vy, w);
+  const double l_eff = 8.0 * WHEEL_RADIUS * std::sin(0.2) / w;
+  EXPECT_NEAR(l_eff / WHEELBASE, std::sin(0.2) / std::sin(0.2 - b), 1e-12);
+  // to first order b * cot(delta) (+4.4 %); the second-order term adds ~ b^2 cot^2 = 0.2 %
+  EXPECT_NEAR(l_eff / WHEELBASE - 1.0, b / std::tan(0.2), 3e-3);
+}
+
+// --- pivot c(delta), L(delta) and v_y --------------------------------------------------------------
+
+TEST(PivotOdometryTest, pivot_offset_and_wheelbase_follow_c0_plus_c1_sin_squared)
+{
+  constexpr double c0 = 0.005, c1 = 0.025;
+  const Odometry odom = make_odometry(c0, c1);
+  EXPECT_DOUBLE_EQ(odom.getPivotOffset(0.0), c0);
+  EXPECT_DOUBLE_EQ(odom.getPivotOffset(M_PI_2), c0 + c1);
+  EXPECT_DOUBLE_EQ(odom.getPivotOffset(-M_PI_2), c0 + c1);
+  EXPECT_NEAR(odom.getPivotOffset(M_PI_4), c0 + 0.5 * c1, 1e-15);
+  EXPECT_NEAR(odom.getPivotOffset(-1.3), c0 + c1 * std::pow(std::sin(1.3), 2), 1e-15);
+  for (double a : {0.0, 0.3, -0.8, 1.3, M_PI_2})
+  {
+    EXPECT_DOUBLE_EQ(odom.yawRateWheelbase(a), WHEELBASE + odom.getPivotOffset(a));
+  }
+}
+
+TEST(PivotOdometryTest, yaw_rate_arm_and_vy_are_consistent_with_c)
+{
+  constexpr double c0 = 0.004, c1 = 0.03, b = 0.005;
+  const Odometry odom = make_odometry(c0, c1, b);
+  for (const double alpha : {0.05, -0.3, 0.9, -1.4, M_PI_2})
+  {
+    for (const double Ws : {6.0, -6.0})
+    {
+      double vx, vy, w;
+      odom.wheelToTwist(Ws, alpha, vx, vy, w);
+      const double v_d = Ws * WHEEL_RADIUS;
+      const double dt = odom.trueSteering(alpha);
+      const double c = c0 + c1 * std::sin(dt) * std::sin(dt);
+      EXPECT_NEAR(w * (WHEELBASE + c), v_d * std::sin(dt), 1e-14);  // w = v_d sin / (L0 + c)
+      EXPECT_NEAR(vx, v_d * std::cos(dt), 1e-14);
+      EXPECT_NEAR(vy, c * w, 1e-15);                                 // v_y = c * w
+      // the drive wheel's lateral speed in the body frame is w * L: the pivot has no lateral speed
+      EXPECT_NEAR(vy - c * w, 0.0, 1e-15);
+    }
+  }
+}
 
 TEST(PivotOdometryTest, left_turn_forward_and_reverse_both_give_vy_equal_c_times_w)
 {
@@ -236,7 +349,7 @@ TEST(PivotOdometryTest, left_turn_forward_and_reverse_both_give_vy_equal_c_times
 
 TEST(PivotOdometryTest, vy_is_the_rolling_mean_of_c_times_w)
 {
-  // A step in the yaw rate: v_y must follow the same rolling mean as w, sample by sample.
+  // A step in the yaw rate at constant c: v_y must follow the same rolling mean as w.
   constexpr double c = 0.03;
   Odometry odom = make_odometry(c);
   const auto dt = rclcpp::Duration::from_seconds(0.02);
@@ -247,11 +360,34 @@ TEST(PivotOdometryTest, vy_is_the_rolling_mean_of_c_times_w)
   }
 }
 
+TEST(PivotOdometryTest, vy_with_steering_dependent_c_is_the_rolling_mean_of_the_samples)
+{
+  // c changes with the steering: v_y is the mean of the per-sample c * w, not mean(c) * mean(w).
+  Odometry odom = make_odometry(0.0, 0.04);
+  const auto dt = rclcpp::Duration::from_seconds(0.02);
+  std::vector<double> samples;
+  for (int i = 0; i < 3 * static_cast<int>(WINDOW); ++i)
+  {
+    const double alpha = 0.1 * i;
+    odom.update(5.0, alpha, dt);
+    double vx, vy, w;
+    odom.wheelToTwist(5.0, alpha, vx, vy, w);
+    samples.push_back(vy);
+    double mean = 0.0;
+    const size_t n = std::min(samples.size(), WINDOW);
+    for (size_t k = samples.size() - n; k < samples.size(); ++k)
+    {
+      mean += samples[k];
+    }
+    EXPECT_NEAR(odom.getLinearY(), mean / static_cast<double>(n), 1e-12) << "step " << i;
+  }
+}
+
 TEST(PivotOdometryTest, zero_speed_gives_zero_vy_and_no_motion)
 {
   for (double alpha : {0.0, 0.7, -0.7, M_PI_2, -M_PI_2})
   {
-    Odometry odom = make_odometry(0.05);
+    Odometry odom = make_odometry(0.02, 0.03, 0.005);
     drive(odom, 0.0, alpha);
     EXPECT_EQ(odom.getLinearY(), 0.0) << alpha;
     EXPECT_EQ(odom.getAngular(), 0.0) << alpha;
@@ -263,9 +399,13 @@ TEST(PivotOdometryTest, zero_speed_gives_zero_vy_and_no_motion)
 
 TEST(PivotOdometryTest, open_loop_uses_the_offset_at_the_commanded_steering)
 {
-  Odometry odom = make_odometry(0.05, {0.0, 1.0}, {0.02, 0.04});
+  constexpr double c0 = 0.01, c1 = 0.04, b = 0.01;
+  const Odometry model = make_odometry(c0, c1, b);
+  Odometry odom = make_odometry(c0, c1, b);
   odom.updateOpenLoop(0.5, 0.2, rclcpp::Duration::from_seconds(0.02), -0.5);
-  EXPECT_NEAR(odom.getLinearY(), 0.03 * 0.2, 1e-15);
+  const double s = std::sin(0.5 - b);
+  EXPECT_NEAR(odom.getLinearY(), (c0 + c1 * s * s) * 0.2, 1e-15);
+  EXPECT_NEAR(model.getPivotOffset(model.trueSteering(-0.5)), c0 + c1 * s * s, 1e-15);
 }
 
 // --- pose integration ----------------------------------------------------------------------------
@@ -275,8 +415,8 @@ namespace
 /// Spin on the spot at steering +-pi/2 until the heading has turned by ~target (rad, signed).
 void spin(Odometry & odom, double Ws, double alpha, double target)
 {
-  // w = Ws * r * sin(alpha) / L; step count chosen for ~target, dt is quantised to ns anyway
-  const double w = Ws * WHEEL_RADIUS * std::sin(alpha) / WHEELBASE;
+  double vx, vy, w;
+  odom.wheelToTwist(Ws, alpha, vx, vy, w);
   const int n = 500;
   const auto dt = rclcpp::Duration::from_seconds(target / w / n);
   for (int i = 0; i < n; ++i)
@@ -288,38 +428,42 @@ void spin(Odometry & odom, double Ws, double alpha, double target)
 
 TEST(PivotOdometryTest, spin_of_90_deg_moves_base_link_by_c_cos_minus_1_sin)
 {
-  constexpr double c = 0.05;
-  // (Ws, alpha): left spin, right spin, and the keep_wheel_side variants (wheel on the other
-  // side, turning backwards)
-  for (const auto & [Ws, alpha] :
-       {std::tuple{4.0, M_PI_2}, std::tuple{4.0, -M_PI_2}, std::tuple{-4.0, M_PI_2},
-        std::tuple{-4.0, -M_PI_2}})
+  // (c0, c1): constant pivot, and the model-A form where the spin pivot is c0 + c1
+  for (const auto & [c0, c1] : {std::tuple{0.05, 0.0}, std::tuple{0.0, 0.025}, std::tuple{0.01, 0.03}})
   {
-    const double target = (Ws * alpha > 0.0 ? 1.0 : -1.0) * M_PI_2;
-    Odometry pivot = make_odometry(c);
-    Odometry at_base_link = make_odometry(0.0);
-    spin(pivot, Ws, alpha, target);
-    spin(at_base_link, Ws, alpha, target);
+    const double c = c0 + c1;  // at |delta| = pi/2
+    // (Ws, alpha): left spin, right spin, and the keep_wheel_side variants (wheel on the other
+    // side, turning backwards)
+    for (const auto & [Ws, alpha] :
+         {std::tuple{4.0, M_PI_2}, std::tuple{4.0, -M_PI_2}, std::tuple{-4.0, M_PI_2},
+          std::tuple{-4.0, -M_PI_2}})
+    {
+      const double target = (Ws * alpha > 0.0 ? 1.0 : -1.0) * M_PI_2;
+      Odometry pivot = make_odometry(c0, c1);
+      spin(pivot, Ws, alpha, target);
 
-    const double theta = pivot.getHeading();
-    ASSERT_NEAR(theta, target, 1e-6);
-    ASSERT_EQ(theta, at_base_link.getHeading());  // the yaw rate is unchanged
-    // relative to the pivot-at-base_link case, base_link is displaced by c * (cos - 1, sin)
-    EXPECT_NEAR(pivot.getX() - at_base_link.getX(), c * (std::cos(theta) - 1.0), 1e-12);
-    EXPECT_NEAR(pivot.getY() - at_base_link.getY(), c * std::sin(theta), 1e-12);
-    // i.e. -c along and +-c beside the start heading for a quarter turn
-    EXPECT_NEAR(pivot.getX() - at_base_link.getX(), -c, 1e-6);
-    EXPECT_NEAR(pivot.getY() - at_base_link.getY(), std::copysign(c, target), 1e-6);
+      const double theta = pivot.getHeading();
+      ASSERT_NEAR(theta, target, 1e-6);
+      // about the pivot at (-c, 0): base_link moves by c * (cos - 1, sin) from the origin
+      // (v_x = v_d cos(pi/2) ~ 6e-17 * v_d contributes nothing measurable)
+      EXPECT_NEAR(pivot.getX(), c * (std::cos(theta) - 1.0), 1e-12) << c0 << " " << c1;
+      EXPECT_NEAR(pivot.getY(), c * std::sin(theta), 1e-12) << c0 << " " << c1;
+      // i.e. -c along and +-c beside the start heading for a quarter turn
+      EXPECT_NEAR(pivot.getX(), -c, 1e-6);
+      EXPECT_NEAR(pivot.getY(), std::copysign(c, target), 1e-6);
+      // and the spin takes the arm L(pi/2) = wheelbase + c
+      EXPECT_NEAR(pivot.getAngular(), Ws * WHEEL_RADIUS * std::sin(alpha) / (WHEELBASE + c), 1e-12);
+    }
   }
 }
 
-TEST(PivotOdometryTest, pivot_point_runs_the_classic_trajectory)
+TEST(PivotOdometryTest, pivot_point_runs_the_classic_trajectory_with_arm_wheelbase_plus_c)
 {
   // For any drive with a constant c, base_link - c * (cos, sin)(heading) (= the pivot) follows
-  // exactly the trajectory of the plain tricycle odometry started at the pivot.
+  // exactly the trajectory of the plain tricycle odometry with wheelbase + c started at the pivot.
   constexpr double c = 0.04;
   Odometry pivot = make_odometry(c);
-  Odometry classic = make_odometry(0.0);
+  Odometry classic = make_odometry(0.0, 0.0, 0.0, WHEELBASE + c);
   for (const auto & [Ws, alpha, dt_s] : mixed_inputs())
   {
     const auto dt = rclcpp::Duration::from_seconds(dt_s);
@@ -333,10 +477,10 @@ TEST(PivotOdometryTest, pivot_point_runs_the_classic_trajectory)
   }
 }
 
-TEST(PivotOdometryTest, straight_driving_is_unaffected_by_the_offset)
+TEST(PivotOdometryTest, straight_driving_is_unaffected_by_the_pivot_model)
 {
-  Odometry pivot = make_odometry(0.05);
-  Odometry classic = make_odometry(0.0);
+  Odometry pivot = make_odometry(0.05, 0.03, 0.006);
+  Odometry classic = make_odometry();
   drive(pivot, 8.0, 0.0, 100);
   drive(classic, 8.0, 0.0, 100);
   EXPECT_EQ(pivot.getX(), classic.getX());
@@ -344,59 +488,16 @@ TEST(PivotOdometryTest, straight_driving_is_unaffected_by_the_offset)
   EXPECT_EQ(pivot.getLinearY(), 0.0);
 }
 
-// --- steering-dependent table ----------------------------------------------------------------------
+// --- validation ------------------------------------------------------------------------------------
 
-TEST(PivotOdometryTest, table_interpolates_linearly_and_clamps)
-{
-  const std::vector<double> knots = {0.2, 0.5, M_PI_2};
-  const std::vector<double> offsets = {0.017, 0.03, 0.05};
-  // the constant (0.1) is ignored once the table is set
-  Odometry odom = make_odometry(0.1, knots, offsets);
-
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(0.0), 0.017);    // below the first knot: clamped
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(0.2), 0.017);    // on a knot
-  EXPECT_NEAR(odom.getPivotOffset(0.35), 0.0235, 1e-15);   // halfway 0.2 .. 0.5
-  EXPECT_NEAR(odom.getPivotOffset(-0.35), 0.0235, 1e-15);  // symmetric in the steering sign
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(0.5), 0.03);
-  EXPECT_NEAR(
-    odom.getPivotOffset(1.0), 0.03 + (1.0 - 0.5) / (M_PI_2 - 0.5) * (0.05 - 0.03), 1e-15);
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(M_PI_2), 0.05);
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(-M_PI_2), 0.05);
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(2.5), 0.05);  // above the last knot: clamped
-  EXPECT_DOUBLE_EQ(odom.getPivotOffset(std::nan("")), 0.05);
-
-  // a single knot is a constant
-  Odometry single = make_odometry(0.0, {0.3}, {0.02});
-  EXPECT_DOUBLE_EQ(single.getPivotOffset(0.0), 0.02);
-  EXPECT_DOUBLE_EQ(single.getPivotOffset(1.0), 0.02);
-
-  // empty table: the constant
-  Odometry constant = make_odometry(0.025);
-  EXPECT_DOUBLE_EQ(constant.getPivotOffset(0.0), 0.025);
-  EXPECT_DOUBLE_EQ(constant.getPivotOffset(1.2), 0.025);
-}
-
-TEST(PivotOdometryTest, table_offset_is_used_for_vy_but_not_for_the_yaw_rate)
-{
-  Odometry table = make_odometry(0.0, {0.0, M_PI_2}, {0.02, 0.06});
-  Odometry classic = make_odometry(0.0);
-  constexpr double alpha = M_PI_2 / 2.0;  // halfway: c = 0.04
-  drive(table, 6.0, alpha);
-  drive(classic, 6.0, alpha);
-  EXPECT_EQ(table.getAngular(), classic.getAngular());  // L(steering) stays = wheelbase
-  EXPECT_EQ(table.getHeading(), classic.getHeading());
-  EXPECT_NEAR(table.getLinearY(), 0.04 * table.getAngular(), 1e-12);
-}
-
-TEST(PivotOdometryTest, invalid_tables_are_rejected)
+TEST(PivotOdometryTest, invalid_model_values_are_rejected)
 {
   Odometry odom(WINDOW);
-  EXPECT_THROW(odom.setPivotOffset(0.0, {0.0, 1.0}, {0.02}), std::invalid_argument);
-  EXPECT_THROW(odom.setPivotOffset(0.0, {0.5, 0.5}, {0.02, 0.03}), std::invalid_argument);
-  EXPECT_THROW(odom.setPivotOffset(0.0, {1.0, 0.5}, {0.02, 0.03}), std::invalid_argument);
-  EXPECT_THROW(odom.setPivotOffset(0.0, {-0.1, 0.5}, {0.02, 0.03}), std::invalid_argument);
-  EXPECT_THROW(odom.setPivotOffset(0.0, {0.0, 0.5}, {0.02, std::nan("")}), std::invalid_argument);
   EXPECT_THROW(odom.setPivotOffset(std::nan("")), std::invalid_argument);
+  EXPECT_THROW(odom.setPivotOffset(0.0, std::nan("")), std::invalid_argument);
+  EXPECT_THROW(odom.setPivotOffset(0.0, INFINITY), std::invalid_argument);
+  EXPECT_THROW(odom.setSteeringDeadband(-0.001), std::invalid_argument);
+  EXPECT_THROW(odom.setSteeringDeadband(std::nan("")), std::invalid_argument);
   EXPECT_NO_THROW(odom.setPivotOffset(-0.02));  // a pivot ahead of base_link (load) is allowed
   EXPECT_DOUBLE_EQ(odom.getPivotOffset(0.3), -0.02);
 }
