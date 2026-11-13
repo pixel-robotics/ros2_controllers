@@ -92,6 +92,38 @@ tricycle_controller:
       gt<>: [0]
     }
   }
+  # Pivot model ("model A", 2026-11-13). `wheelbase` is the physical drive
+  # wheel -> base_link distance (CAD, 1.2526 m on our AMRs). With tandem fork
+  # rollers the robot does not turn about base_link but about a pivot c(delta)
+  # behind it, and the wheel turns a little less than the steering sensor
+  # reads (symmetric deadband / compliance b). Odometry (closed and open loop):
+  #   delta_t = sign(delta) * max(|delta| - b, 0)            true steering
+  #   c       = pivot_offset + pivot_offset_full_steer * sin^2(delta_t)
+  #   w       = v_d * sin(delta_t) / (wheelbase + c),  v_x = v_d * cos(delta_t)
+  #   v_y     = c * w   (same rolling mean as w; twist.linear.y)
+  # Inverse (cmd_vel -> wheel): L = wheelbase + c at the COMMANDED steering,
+  # no deadband compensation (it would make the steering jump by 2b around 0).
+  # All three 0 (the defaults) = the classic tricycle model, bit for bit.
+  # Do not combine with a site wheelbase that already absorbs the mean pivot
+  # (the old 1.266-1.28 overrides): that counts c twice.
+  pivot_offset: {
+    type: double,
+    default_value: 0.0, # m, > 0: pivot behind base_link
+    description: "Constant part c0 (m) of the pivot point behind base_link. The odometry turns the robot about the pivot c = pivot_offset + pivot_offset_full_steer * sin^2(steering): yaw rate arm wheelbase + c, lateral base_link velocity twist.linear.y = c * angular.z. The inverse kinematics uses wheelbase + c at the commanded steering. 0 keeps the classic tricycle model.",
+  }
+  pivot_offset_full_steer: {
+    type: double,
+    default_value: 0.0, # m, c1 = additional pivot offset at |steering| = pi/2
+    description: "Steering-dependent part c1 (m) of the pivot point: c grows by pivot_offset_full_steer * sin^2(steering), i.e. by the full value in a turn on the spot. Fitted per site from the yaw rate against the camera heading (2-4 cm). 0 = constant pivot_offset.",
+  }
+  steering_deadband: {
+    type: double,
+    default_value: 0.0, # rad
+    description: "Symmetric steering deadband b (rad): the odometry uses the true steering sign(delta) * max(|delta| - b, 0) of the measured (closed loop) or commanded (open loop) angle. Not compensated in the inverse kinematics. Fitted per site 0.25-0.5 deg. 0 = measured angle unchanged.",
+    validation: {
+      bounds<>: [0.0, 0.1]
+    }
+  }
   traction:
     # "The positive limit will be applied to both directions. Setting different limits for positive "
     # "and negative directions is not supported. Actuators are "

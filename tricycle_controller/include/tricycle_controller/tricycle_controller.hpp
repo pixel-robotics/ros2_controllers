@@ -100,6 +100,9 @@ protected:
     const std::string & steering_joint_name, std::vector<SteeringHandle> & joint);
   double convert_trans_rot_vel_to_steering_angle(double v, double omega, double wheelbase);
   std::tuple<double, double> twist_to_ackermann(double linear_command, double angular_command);
+  /// twist_to_ackermann with the pivot model (pivot_offset*, steering_deadband) configured.
+  std::tuple<double, double> twist_to_ackermann_pivot(
+    double linear_command, double angular_command) const;
 
   /**
    * \brief Steering hold rule: a twist that is not exactly zero but below the

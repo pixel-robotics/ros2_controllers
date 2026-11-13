@@ -18,6 +18,8 @@
 
 #define _USE_MATH_DEFINES
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <queue>
 #include <string>
@@ -180,6 +182,8 @@ controller_interface::return_type TricycleController::update(
       odometry_message.pose.pose.orientation.w = orientation.w();
     }
     odometry_message.twist.twist.linear.x = odometry_.getLinear();
+    // Lateral motion of base_link about the pivot point (pivot_offset); 0 by default.
+    odometry_message.twist.twist.linear.y = odometry_.getLinearY();
     odometry_message.twist.twist.angular.z = odometry_.getAngular();
     realtime_odometry_publisher_->unlockAndPublish();
   }
@@ -384,8 +388,15 @@ controller_interface::return_type TricycleController::update(
     double clipped_linear_vel = Ws_write * params_.wheel_radius * std::cos(alpha_write);
     double clipped_angular_vel = (std::abs(alpha_write) > 1e-6) ?
       clipped_linear_vel * std::tan(alpha_write) / params_.wheelbase : 0.0;
+    if (odometry_.hasPivotModel())
+    {
+      // same forward model as the closed loop (deadband, L(delta)) at the commanded steering
+      double clipped_lateral_vel;
+      odometry_.wheelToTwist(
+        Ws_write, alpha_write, clipped_linear_vel, clipped_lateral_vel, clipped_angular_vel);
+    }
 
-    odometry_.updateOpenLoop(clipped_linear_vel, clipped_angular_vel, period);
+    odometry_.updateOpenLoop(clipped_linear_vel, clipped_angular_vel, period, alpha_write);
   }
   else
   {
@@ -434,6 +445,33 @@ CallbackReturn TricycleController::on_configure(const rclcpp_lifecycle::State & 
 
   odometry_.setWheelParams(params_.wheelbase, params_.wheel_radius);
   odometry_.setVelocityRollingWindowSize(static_cast<size_t>(params_.velocity_rolling_window_size));
+  try
+  {
+    odometry_.setPivotOffset(params_.pivot_offset, params_.pivot_offset_full_steer);
+    odometry_.setSteeringDeadband(params_.steering_deadband);
+  }
+  catch (const std::invalid_argument & e)
+  {
+    RCLCPP_ERROR(logger, "Error configuring the pivot model: %s", e.what());
+    return CallbackReturn::ERROR;
+  }
+  // L(delta) = wheelbase + pivot_offset + pivot_offset_full_steer * sin^2(delta) must stay > 0
+  if (!(params_.wheelbase + params_.pivot_offset + std::min(0.0, params_.pivot_offset_full_steer) >
+        0.0))
+  {
+    RCLCPP_ERROR(
+      logger, "Pivot model: wheelbase + pivot_offset (+ pivot_offset_full_steer) must be > 0");
+    return CallbackReturn::ERROR;
+  }
+  if (odometry_.hasPivotModel())
+  {
+    RCLCPP_INFO(
+      logger,
+      "Pivot model: wheelbase %.4f m, pivot %.3f + %.3f * sin^2(steering) m behind base_link, "
+      "steering deadband %.5f rad",
+      params_.wheelbase, params_.pivot_offset, params_.pivot_offset_full_steer,
+      params_.steering_deadband);
+  }
 
   cmd_vel_timeout_ = std::chrono::milliseconds{params_.cmd_vel_timeout};
   params_.publish_ackermann_command =
@@ -1024,6 +1062,11 @@ std::tuple<double, double> TricycleController::twist_to_ackermann(double Vx, dou
   // using naming convention in http://users.isr.ist.utl.pt/~mir/cadeiras/robmovel/Kinematics.pdf
   double alpha, Ws;
 
+  if (odometry_.hasPivotModel())
+  {
+    return twist_to_ackermann_pivot(Vx, theta_dot);
+  }
+
   if (Vx == 0 && theta_dot != 0)
   {  // is spin action
     alpha = theta_dot > 0 ? M_PI_2 : -M_PI_2;
@@ -1033,6 +1076,42 @@ std::tuple<double, double> TricycleController::twist_to_ackermann(double Vx, dou
 
   alpha = convert_trans_rot_vel_to_steering_angle(Vx, theta_dot, params_.wheelbase);
   Ws = Vx / (params_.wheel_radius * std::cos(alpha));
+  return std::make_tuple(alpha, Ws);
+}
+
+std::tuple<double, double> TricycleController::twist_to_ackermann_pivot(
+  double Vx, double theta_dot) const
+{
+  // Pivot model: the yaw rate arm is L(delta) = wheelbase + c(delta), evaluated at the COMMANDED
+  // steering angle (never the measured one). v_y = c * w is not commandable and is not fed back.
+  //
+  // The steering deadband is deliberately NOT compensated here: adding +-b to the command would
+  // make the steering jump by 2b whenever the commanded angle crosses 0 (straight driving with
+  // small heading corrections), i.e. steering chatter. The path tracker's feedback absorbs the
+  // small yaw-rate shortfall (b ~ 0.3 deg); the odometry models it so the pose stays right.
+  const double r = params_.wheel_radius;
+  if (Vx == 0.0)
+  {
+    if (theta_dot == 0.0)
+    {
+      return std::make_tuple(0.0, 0.0);
+    }
+    // spin: the wheel at +-90 deg drives the arm L(pi/2); keep_wheel_side is applied by the caller
+    const double alpha = theta_dot > 0.0 ? M_PI_2 : -M_PI_2;
+    return std::make_tuple(alpha, std::abs(theta_dot) * odometry_.yawRateWheelbase(alpha) / r);
+  }
+  if (theta_dot == 0.0)
+  {
+    return std::make_tuple(0.0, Vx / r);
+  }
+  // tan(delta) = w * L(delta) / Vx is implicit in delta: one fixed-point step from L = wheelbase.
+  // The step contracts by ~c1 / (2 L) ~ 1 %, leaving < 1e-3 relative error for c1 <= 5 cm.
+  // atan, not atan2: |delta| <= pi/2 also in reverse (Vx < 0 drives the wheel backwards).
+  const double delta0 = std::atan(theta_dot * params_.wheelbase / Vx);
+  const double alpha = std::atan(theta_dot * odometry_.yawRateWheelbase(delta0) / Vx);
+  const double L = odometry_.yawRateWheelbase(alpha);
+  // drive wheel speed: |v_d| = hypot(Vx, w * L), its sign the driving direction
+  const double Ws = std::copysign(std::hypot(Vx, theta_dot * L), Vx) / r;
   return std::make_tuple(alpha, Ws);
 }
 
